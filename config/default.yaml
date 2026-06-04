@@ -1,0 +1,79 @@
+# ─────────────────────────────────────────────────────────────────
+# Network Security Toolkit — Default Application Configuration
+# ─────────────────────────────────────────────────────────────────
+# All values here are loaded at startup and exposed as typed
+# dataclasses (see src/core/config.py).  Override any setting by
+# editing this file OR by setting the corresponding environment
+# variable (see README.md → Configuration).
+# ─────────────────────────────────────────────────────────────────
+
+network:
+  # Network interface to capture on.
+  # null → Scapy will auto-select the default interface.
+  # Override with env var NST_INTERFACE=eth0
+  interface: null
+
+  # Enable promiscuous mode so the NIC captures all frames on the
+  # segment, not just frames addressed to this host.
+  promiscuous: true
+
+  # Seconds to wait for packets before giving up.
+  # 0 → run until the user presses Ctrl-C.
+  capture_timeout: 0
+
+# ─────────────────────────────────────────────────────────────────
+sniffer:
+  # Maximum number of packets to capture before stopping.
+  # 0 → unlimited.
+  packet_count: 0
+
+  # Berkeley Packet Filter expression applied to the capture.
+  # Examples: "tcp port 80", "udp", "arp", "host 192.168.1.1"
+  # Empty string → capture everything.
+  filter: ""
+
+  # Path to write a .pcap file.  null → do not write to disk.
+  output_file: null
+
+# ─────────────────────────────────────────────────────────────────
+analyzer:
+  # Scan cleartext packet payloads for credential keywords
+  # (passwords, usernames in FTP/Telnet/HTTP Basic Auth traffic).
+  detect_credentials: true
+
+  # How many distinct destination ports a single source IP must
+  # hit within the observation window before a port-scan alert
+  # is raised.
+  suspicious_port_scan_threshold: 10
+
+  # Print a Rich alert panel when suspicious activity is detected.
+  alert_on_suspicious: true
+
+# ─────────────────────────────────────────────────────────────────
+arp_detector:
+  # Seconds between consecutive ARP table snapshots.
+  check_interval: 1.0
+
+  # How many consecutive anomalous ARP replies from the same host
+  # must be observed before raising a critical alert.
+  alert_threshold: 3
+
+  # IP addresses that are unconditionally trusted and will never
+  # trigger an ARP-spoofing alert (e.g. known routers / gateways).
+  trusted_ips: []
+
+# ─────────────────────────────────────────────────────────────────
+logging:
+  # Root log level: DEBUG | INFO | WARNING | ERROR | CRITICAL
+  # Override with env var NST_LOG_LEVEL=DEBUG
+  level: INFO
+
+  # Path to the rotating log file (relative to project root).
+  file: logs/network_toolkit.log
+
+  # Maximum size of one log file in bytes before rotation.
+  # 10 485 760 = 10 MB
+  max_bytes: 10485760
+
+  # Number of rotated backup files to retain alongside the active log.
+  backup_count: 5

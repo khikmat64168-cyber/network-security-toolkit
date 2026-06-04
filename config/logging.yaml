@@ -1,0 +1,28 @@
+# ─────────────────────────────────────────────────────────────────
+# Network Security Toolkit — Logging Configuration
+# ─────────────────────────────────────────────────────────────────
+# Loaded by src/core/logger.py to configure per-module log levels.
+# The top-level fields (level, file, max_bytes, backup_count) mirror
+# the [logging] section of default.yaml; values here take precedence
+# during setup so this file can tune logging without touching the
+# main application config.
+# ─────────────────────────────────────────────────────────────────
+
+level: INFO
+file: logs/network_toolkit.log
+max_bytes: 10485760
+backup_count: 5
+
+# Per-module log level overrides.
+# Useful for debugging a single subsystem while keeping the rest quiet.
+# Set a module to DEBUG here and relaunch — no code changes needed.
+module_levels:
+  src.sniffer: INFO
+  src.analyzer: INFO
+  src.arp_detector: INFO
+  src.cli: INFO
+  src.core: INFO
+
+  # Silence noisy third-party libraries
+  scapy.runtime: WARNING
+  scapy.loading: WARNING
