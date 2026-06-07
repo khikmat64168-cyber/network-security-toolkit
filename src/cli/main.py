@@ -12,7 +12,7 @@ Subcommands
 """
 from __future__ import annotations
 
-import sys
+import os
 from pathlib import Path
 from typing import Optional
 
@@ -24,18 +24,37 @@ from rich.text import Text
 
 from src.cli.banner import print_banner
 from src.core.config import AppConfig
-from src.core.exceptions import InsufficientPermissionsError
+from src.core.exceptions import (
+    CaptureError,
+    InsufficientPermissionsError,
+    InterfaceError,
+)
 from src.core.logger import get_logger, setup_logging
 
 console = Console()
 err_console = Console(stderr=True)
+logger = get_logger(__name__)
+
+# Protocol → Rich colour mapping (used in sniff output)
+_PROTO_COLOURS = {
+    "HTTP":  "bold green",
+    "DNS":   "bold yellow",
+    "TCP":   "bold cyan",
+    "UDP":   "bold blue",
+    "ARP":   "bold magenta",
+    "ICMP":  "bold bright_magenta",
+    "OTHER": "dim white",
+}
 
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Root command group
 # ──────────────────────────────────────────────────────────────────────────────
 
-@click.group(invoke_without_command=True, context_settings={"help_option_names": ["-h", "--help"]})
+@click.group(
+    invoke_without_command=True,
+    context_settings={"help_option_names": ["-h", "--help"]},
+)
 @click.version_option(version="1.0.0", prog_name="nst")
 @click.option(
     "--config",
@@ -44,7 +63,7 @@ err_console = Console(stderr=True)
     type=click.Path(path_type=Path),
     default=None,
     metavar="FILE",
-    help="Path to a YAML configuration file (default: config/default.yaml).",
+    help="Path to a YAML config file (default: config/default.yaml).",
 )
 @click.option(
     "--debug",
@@ -86,38 +105,17 @@ def cli(ctx: click.Context, config_path: Optional[Path], debug: bool) -> None:
 # ──────────────────────────────────────────────────────────────────────────────
 
 @cli.command("sniff")
-@click.option(
-    "-i", "--interface",
-    default=None,
-    metavar="IFACE",
-    help="Network interface to capture on (default: auto-detect).",
-)
-@click.option(
-    "-c", "--count",
-    default=0,
-    type=click.IntRange(min=0),
-    show_default=True,
-    help="Packets to capture before stopping (0 = unlimited).",
-)
-@click.option(
-    "-f", "--filter",
-    "bpf_filter",
-    default="",
-    metavar="EXPR",
-    help='BPF filter expression (e.g. "tcp port 80", "arp").',
-)
-@click.option(
-    "-o", "--output",
-    default=None,
-    metavar="FILE",
-    help="Write captured packets to a .pcap file.",
-)
-@click.option(
-    "-v", "--verbose",
-    is_flag=True,
-    default=False,
-    help="Print every packet's summary to the console.",
-)
+@click.option("-i", "--interface", default=None, metavar="IFACE",
+              help="Network interface to capture on (default: auto-detect).")
+@click.option("-c", "--count", default=0, type=click.IntRange(min=0),
+              show_default=True,
+              help="Packets to capture before stopping (0 = unlimited).")
+@click.option("-f", "--filter", "bpf_filter", default="", metavar="EXPR",
+              help='BPF filter expression (e.g. "tcp port 80", "arp").')
+@click.option("-o", "--output", default=None, metavar="FILE",
+              help="Write captured packets to a .pcap file.")
+@click.option("-v", "--verbose", is_flag=True, default=False,
+              help="Show full packet summary (default: concise one-liner).")
 @click.pass_context
 def sniff(
     ctx: click.Context,
@@ -129,9 +127,10 @@ def sniff(
 ) -> None:
     """Capture and analyse network packets in real time."""
     _require_root()
+
     cfg: AppConfig = ctx.obj["config"]
 
-    # CLI flags override config-file values
+    # Apply CLI flags over config-file values
     if interface:
         cfg.network.interface = interface
     if count:
@@ -141,20 +140,86 @@ def sniff(
     if output:
         cfg.sniffer.output_file = output
 
+    # Late imports so startup is fast when --help is used
+    from src.sniffer.capture import PacketCapture
+    from src.sniffer.interface import InterfaceManager
+    from src.sniffer.parsers import ParserDispatcher
+
+    # Resolve and validate the interface
+    try:
+        resolved = InterfaceManager.resolve(cfg.network.interface)
+        cfg.network.interface = resolved
+    except InterfaceError as exc:
+        err_console.print(f"[red]Interface error:[/red] {exc}")
+        raise SystemExit(1)
+
+    iface_label = cfg.network.interface or "auto-detect"
+
     console.print(
         Panel(
-            Text(
-                "Packet Sniffer will be fully implemented in Phase 2.\n"
-                f"Interface : {cfg.network.interface or 'auto-detect'}\n"
-                f"Count     : {cfg.sniffer.packet_count or 'unlimited'}\n"
-                f"Filter    : {cfg.sniffer.filter or '(none)'}\n"
-                f"Output    : {cfg.sniffer.output_file or '(none)'}",
-                style="yellow",
-            ),
-            title="[bold cyan]nst sniff[/bold cyan]",
+            f"Interface : [cyan]{iface_label}[/cyan]\n"
+            f"Filter    : [cyan]{cfg.sniffer.filter or '(none)'}[/cyan]\n"
+            f"Count     : [cyan]{cfg.sniffer.packet_count or 'unlimited'}[/cyan]\n"
+            f"Output    : [cyan]{cfg.sniffer.output_file or '(none)'}[/cyan]\n\n"
+            "Press [bold]Ctrl+C[/bold] to stop.",
+            title="[bold cyan]Packet Capture — Started[/bold cyan]",
             border_style="cyan",
         )
     )
+
+    capture = PacketCapture(cfg.sniffer, cfg.network)
+
+    def on_packet(pkt: object) -> None:  # type: ignore[type-arg]
+        from scapy.packet import Packet as ScapyPacket
+
+        if not isinstance(pkt, ScapyPacket):
+            return
+
+        parsed = ParserDispatcher.dispatch(pkt)
+
+        proto = parsed.protocol.value
+        colour = _PROTO_COLOURS.get(proto, "white")
+        ts = parsed.timestamp.strftime("%H:%M:%S")
+
+        src = parsed.src_ip
+        dst = parsed.dst_ip
+        if parsed.src_port is not None and parsed.dst_port is not None:
+            src = f"{src}:{parsed.src_port}"
+            dst = f"{dst}:{parsed.dst_port}"
+
+        flags_str = f" [{parsed.flags}]" if parsed.flags else ""
+        summary = parsed.summary[:70] if not verbose else parsed.summary
+
+        console.print(
+            f"[dim]{ts}[/dim]  "
+            f"[{colour}]{proto:<5}[/{colour}]  "
+            f"[white]{src}[/white] → [white]{dst}[/white]"
+            f"[dim]{flags_str}[/dim]  "
+            f"[italic dim]{summary}[/italic dim]  "
+            f"[dim]{parsed.length}B[/dim]"
+        )
+
+    try:
+        capture.start(on_packet)
+    except KeyboardInterrupt:
+        pass
+    except InsufficientPermissionsError as exc:
+        err_console.print(
+            Panel(
+                f"[bold red]{exc}[/bold red]\n\nRe-run with: [bold]sudo nst sniff[/bold]",
+                title="[red]Permission Error[/red]",
+                border_style="red",
+            )
+        )
+        raise SystemExit(1)
+    except CaptureError as exc:
+        err_console.print(f"[red]Capture failed:[/red] {exc}")
+        raise SystemExit(1)
+    finally:
+        console.print(
+            f"\n[dim]Capture stopped.[/dim]  "
+            f"[bold]{capture.packet_count}[/bold] packets captured."
+        )
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -162,26 +227,13 @@ def sniff(
 # ──────────────────────────────────────────────────────────────────────────────
 
 @cli.command("arp-watch")
-@click.option(
-    "-i", "--interface",
-    default=None,
-    metavar="IFACE",
-    help="Network interface to monitor (default: auto-detect).",
-)
-@click.option(
-    "--interval",
-    default=None,
-    type=click.FloatRange(min=0.1),
-    metavar="SECS",
-    help="ARP table snapshot interval in seconds (default from config).",
-)
-@click.option(
-    "--trusted-ip",
-    "trusted_ips",
-    multiple=True,
-    metavar="IP",
-    help="IP address to treat as trusted; may be repeated.",
-)
+@click.option("-i", "--interface", default=None, metavar="IFACE",
+              help="Network interface to monitor (default: auto-detect).")
+@click.option("--interval", default=None, type=click.FloatRange(min=0.1),
+              metavar="SECS",
+              help="ARP table snapshot interval in seconds (default from config).")
+@click.option("--trusted-ip", "trusted_ips", multiple=True, metavar="IP",
+              help="IP address to treat as trusted; may be repeated.")
 @click.pass_context
 def arp_watch(
     ctx: click.Context,
@@ -223,14 +275,51 @@ def arp_watch(
 @click.pass_context
 def interfaces(ctx: click.Context) -> None:
     """List available network interfaces."""
-    _require_root()
-    console.print(
-        Panel(
-            "[yellow]Interface listing will be fully implemented in Phase 2.[/yellow]",
-            title="[bold cyan]nst interfaces[/bold cyan]",
-            border_style="cyan",
-        )
+    from src.sniffer.interface import InterfaceManager
+
+    try:
+        iface_list = InterfaceManager.list_interfaces()
+        default_name = ""
+        try:
+            default_name = InterfaceManager.get_default()
+        except InterfaceError:
+            pass
+    except InterfaceError as exc:
+        err_console.print(f"[red]Error:[/red] {exc}")
+        raise SystemExit(1)
+
+    if not iface_list:
+        console.print("[yellow]No network interfaces found.[/yellow]")
+        return
+
+    table = Table(
+        title="Available Network Interfaces",
+        header_style="bold magenta",
+        border_style="bright_blue",
+        show_lines=True,
     )
+    table.add_column("Interface", style="bold cyan", no_wrap=True)
+    table.add_column("IP Address", style="green")
+    table.add_column("MAC Address", style="dim")
+    table.add_column("Description", style="dim")
+    table.add_column("Default", justify="center")
+
+    for iface in iface_list:
+        is_default = "[bold yellow]★[/bold yellow]" if iface.name == default_name else ""
+        desc = iface.description if iface.description != iface.name else ""
+        table.add_row(
+            iface.name,
+            iface.ip or "[dim](none)[/dim]",
+            iface.mac or "[dim](none)[/dim]",
+            desc,
+            is_default,
+        )
+
+    console.print(table)
+    if default_name:
+        console.print(
+            f"\n[dim]★ Default capture interface:[/dim] [cyan]{default_name}[/cyan]"
+        )
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -245,7 +334,6 @@ def status(ctx: click.Context) -> None:
 
     table = Table(
         title="Network Security Toolkit — Configuration",
-        show_header=True,
         header_style="bold magenta",
         border_style="bright_blue",
         show_lines=True,
@@ -254,27 +342,35 @@ def status(ctx: click.Context) -> None:
     table.add_column("Setting", style="white", no_wrap=True, min_width=28)
     table.add_column("Value", style="green")
 
-    # Network
-    table.add_row("network", "interface", cfg.network.interface or "[dim]auto-detect[/dim]")
+    table.add_row("network", "interface",
+                  cfg.network.interface or "[dim]auto-detect[/dim]")
     table.add_row("", "promiscuous", str(cfg.network.promiscuous))
-    table.add_row("", "capture_timeout", f"{cfg.network.capture_timeout}s" if cfg.network.capture_timeout else "[dim]unlimited[/dim]")
+    table.add_row("", "capture_timeout",
+                  f"{cfg.network.capture_timeout}s"
+                  if cfg.network.capture_timeout else "[dim]unlimited[/dim]")
 
-    # Sniffer
-    table.add_row("sniffer", "packet_count", str(cfg.sniffer.packet_count) if cfg.sniffer.packet_count else "[dim]unlimited[/dim]")
+    table.add_row("sniffer", "packet_count",
+                  str(cfg.sniffer.packet_count)
+                  if cfg.sniffer.packet_count else "[dim]unlimited[/dim]")
     table.add_row("", "filter", cfg.sniffer.filter or "[dim](none)[/dim]")
-    table.add_row("", "output_file", cfg.sniffer.output_file or "[dim](none)[/dim]")
+    table.add_row("", "output_file",
+                  cfg.sniffer.output_file or "[dim](none)[/dim]")
 
-    # Analyzer
-    table.add_row("analyzer", "detect_credentials", str(cfg.analyzer.detect_credentials))
-    table.add_row("", "port_scan_threshold", str(cfg.analyzer.suspicious_port_scan_threshold))
-    table.add_row("", "alert_on_suspicious", str(cfg.analyzer.alert_on_suspicious))
+    table.add_row("analyzer", "detect_credentials",
+                  str(cfg.analyzer.detect_credentials))
+    table.add_row("", "port_scan_threshold",
+                  str(cfg.analyzer.suspicious_port_scan_threshold))
+    table.add_row("", "alert_on_suspicious",
+                  str(cfg.analyzer.alert_on_suspicious))
 
-    # ARP detector
-    table.add_row("arp_detector", "check_interval", f"{cfg.arp_detector.check_interval}s")
-    table.add_row("", "alert_threshold", str(cfg.arp_detector.alert_threshold))
-    table.add_row("", "trusted_ips", ", ".join(cfg.arp_detector.trusted_ips) or "[dim](none)[/dim]")
+    table.add_row("arp_detector", "check_interval",
+                  f"{cfg.arp_detector.check_interval}s")
+    table.add_row("", "alert_threshold",
+                  str(cfg.arp_detector.alert_threshold))
+    table.add_row("", "trusted_ips",
+                  ", ".join(cfg.arp_detector.trusted_ips)
+                  or "[dim](none)[/dim]")
 
-    # Logging
     table.add_row("logging", "level", cfg.logging.level)
     table.add_row("", "file", cfg.logging.file)
     table.add_row("", "max_bytes", f"{cfg.logging.max_bytes:,} bytes")
@@ -289,19 +385,17 @@ def status(ctx: click.Context) -> None:
 
 def _require_root() -> None:
     """
-    Abort with a helpful message if the process is not running as root.
+    Abort with a clear message if the process is not running as root.
 
-    Scapy requires raw socket access which is restricted to uid 0 on
-    Linux and macOS.  Raising InsufficientPermissionsError here gives
-    callers a typed exception to catch in tests.
+    Scapy requires raw socket access which the OS restricts to uid 0
+    on Linux and macOS.
     """
-    import os
     if os.geteuid() != 0:
         err_console.print(
             Panel(
                 "[bold red]Root privileges required.[/bold red]\n\n"
-                "Packet capture and ARP monitoring use raw sockets, which\n"
-                "require administrator access.\n\n"
+                "Packet capture and ARP monitoring use raw sockets,\n"
+                "which require administrator access.\n\n"
                 "Re-run with:  [bold]sudo nst[/bold] [dim]<command>[/dim]",
                 title="[red]Permission Error[/red]",
                 border_style="red",
