@@ -148,18 +148,6 @@ pytest --cov=src --cov-report=term-missing
 
 ---
 
-## Project Phases
-
-| Phase | Status     | Description                              |
-|-------|------------|------------------------------------------|
-| 1     | Complete   | Architecture, config, logging, CLI       |
-| 2     | Pending    | Packet sniffer core and protocol parsers |
-| 3     | Pending    | Traffic analysis engine                  |
-| 4     | Pending    | ARP spoofing detection module            |
-| 5     | Pending    | Integration, testing, final release      |
-
----
-
 ## License
 
 MIT License — see [LICENSE](LICENSE) for details.
