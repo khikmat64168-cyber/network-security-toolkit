@@ -141,6 +141,7 @@ def sniff(
         cfg.sniffer.output_file = output
 
     # Late imports so startup is fast when --help is used
+    from src.analyzer.engine import AnalysisEngine
     from src.sniffer.capture import PacketCapture
     from src.sniffer.interface import InterfaceManager
     from src.sniffer.parsers import ParserDispatcher
@@ -157,10 +158,12 @@ def sniff(
 
     console.print(
         Panel(
-            f"Interface : [cyan]{iface_label}[/cyan]\n"
-            f"Filter    : [cyan]{cfg.sniffer.filter or '(none)'}[/cyan]\n"
-            f"Count     : [cyan]{cfg.sniffer.packet_count or 'unlimited'}[/cyan]\n"
-            f"Output    : [cyan]{cfg.sniffer.output_file or '(none)'}[/cyan]\n\n"
+            f"Interface         : [cyan]{iface_label}[/cyan]\n"
+            f"Filter            : [cyan]{cfg.sniffer.filter or '(none)'}[/cyan]\n"
+            f"Count             : [cyan]{cfg.sniffer.packet_count or 'unlimited'}[/cyan]\n"
+            f"Output            : [cyan]{cfg.sniffer.output_file or '(none)'}[/cyan]\n"
+            f"Credential scan   : [cyan]{cfg.analyzer.detect_credentials}[/cyan]\n"
+            f"Threat detection  : [cyan]{cfg.analyzer.alert_on_suspicious}[/cyan]\n\n"
             "Press [bold]Ctrl+C[/bold] to stop.",
             title="[bold cyan]Packet Capture — Started[/bold cyan]",
             border_style="cyan",
@@ -168,6 +171,7 @@ def sniff(
     )
 
     capture = PacketCapture(cfg.sniffer, cfg.network)
+    engine = AnalysisEngine(cfg.analyzer)
 
     def on_packet(pkt: object) -> None:  # type: ignore[type-arg]
         from scapy.packet import Packet as ScapyPacket
@@ -199,6 +203,9 @@ def sniff(
             f"[dim]{parsed.length}B[/dim]"
         )
 
+        # Run analysis (credential detection + threat detection)
+        engine.process(parsed)
+
     try:
         capture.start(on_packet)
     except KeyboardInterrupt:
@@ -216,10 +223,7 @@ def sniff(
         err_console.print(f"[red]Capture failed:[/red] {exc}")
         raise SystemExit(1)
     finally:
-        console.print(
-            f"\n[dim]Capture stopped.[/dim]  "
-            f"[bold]{capture.packet_count}[/bold] packets captured."
-        )
+        _print_session_summary(capture.packet_count, engine)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -382,6 +386,85 @@ def status(ctx: click.Context) -> None:
 # ──────────────────────────────────────────────────────────────────────────────
 # Helpers
 # ──────────────────────────────────────────────────────────────────────────────
+
+def _print_session_summary(packet_count: int, engine: "AnalysisEngine") -> None:  # type: ignore[name-defined]
+    """Print a Rich statistics table after the capture session ends."""
+    from src.analyzer.engine import AnalysisEngine as _AE  # local import avoids circular
+
+    stats = engine.stats
+    alerts = engine.alerts
+
+    console.print()
+    console.rule("[bold cyan]Session Summary[/bold cyan]")
+
+    # ── Overview ───────────────────────────────────────────────────────────────
+    overview = Table.grid(padding=(0, 2))
+    overview.add_column(style="dim", no_wrap=True)
+    overview.add_column(style="bold white")
+    overview.add_row("Total packets :", str(packet_count))
+    overview.add_row("Total bytes   :", f"{stats.total_bytes:,}")
+    overview.add_row("Credentials   :", f"[bold red]{alerts.credential_count}[/bold red]")
+    overview.add_row("Threats       :", f"[bold red]{alerts.threat_count}[/bold red]")
+    console.print(overview)
+    console.print()
+
+    if stats.is_empty():
+        console.print("[dim]No packets analysed.[/dim]")
+        return
+
+    # ── Protocol breakdown ─────────────────────────────────────────────────────
+    proto_table = Table(
+        title="Protocol Breakdown",
+        header_style="bold magenta",
+        border_style="bright_blue",
+        show_lines=False,
+    )
+    proto_table.add_column("Protocol", style="cyan")
+    proto_table.add_column("Packets", justify="right")
+    proto_table.add_column("Bytes", justify="right")
+    proto_table.add_column("Share", justify="right")
+
+    for proto, pkt_count, byte_count, pct in stats.protocol_breakdown():
+        proto_table.add_row(
+            proto.value,
+            str(pkt_count),
+            f"{byte_count:,}",
+            f"{pct:.1f}%",
+        )
+    console.print(proto_table)
+
+    # ── Top talkers ────────────────────────────────────────────────────────────
+    talkers = stats.top_talkers(5)
+    ports = stats.top_ports(5)
+
+    if talkers:
+        console.print()
+        talker_table = Table(
+            title="Top Source IPs",
+            header_style="bold magenta",
+            border_style="bright_blue",
+            show_lines=False,
+        )
+        talker_table.add_column("IP Address", style="cyan")
+        talker_table.add_column("Packets", justify="right")
+        for ip, cnt in talkers:
+            talker_table.add_row(ip, str(cnt))
+        console.print(talker_table)
+
+    if ports:
+        console.print()
+        port_table = Table(
+            title="Top Destination Ports",
+            header_style="bold magenta",
+            border_style="bright_blue",
+            show_lines=False,
+        )
+        port_table.add_column("Port", style="cyan")
+        port_table.add_column("Hits", justify="right")
+        for port, cnt in ports:
+            port_table.add_row(str(port), str(cnt))
+        console.print(port_table)
+
 
 def _require_root() -> None:
     """
