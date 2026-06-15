@@ -85,6 +85,7 @@ class ArpDetectorConfig:
     check_interval: float = 1.0
     alert_threshold: int = 3
     trusted_ips: List[str] = field(default_factory=list)
+    gateway_ip: Optional[str] = None
 
 
 @dataclass

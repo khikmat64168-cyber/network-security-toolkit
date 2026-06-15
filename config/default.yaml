@@ -62,6 +62,11 @@ arp_detector:
   # trigger an ARP-spoofing alert (e.g. known routers / gateways).
   trusted_ips: []
 
+  # IP address of the default gateway.  When set, a MAC change for this
+  # IP raises a "critical" alert instead of "high".
+  # null → gateway protection is disabled.
+  gateway_ip: null
+
 # ─────────────────────────────────────────────────────────────────
 logging:
   # Root log level: DEBUG | INFO | WARNING | ERROR | CRITICAL
