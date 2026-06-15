@@ -238,12 +238,15 @@ def sniff(
               help="ARP table snapshot interval in seconds (default from config).")
 @click.option("--trusted-ip", "trusted_ips", multiple=True, metavar="IP",
               help="IP address to treat as trusted; may be repeated.")
+@click.option("--gateway", default=None, metavar="IP",
+              help="Gateway IP to monitor for MAC changes (critical severity).")
 @click.pass_context
 def arp_watch(
     ctx: click.Context,
     interface: Optional[str],
     interval: Optional[float],
     trusted_ips: tuple[str, ...],
+    gateway: Optional[str],
 ) -> None:
     """Monitor ARP traffic and detect spoofing / MITM attacks."""
     _require_root()
@@ -255,20 +258,46 @@ def arp_watch(
         cfg.arp_detector.check_interval = interval
     if trusted_ips:
         cfg.arp_detector.trusted_ips = list(trusted_ips)
+    if gateway:
+        cfg.arp_detector.gateway_ip = gateway
+
+    from src.arp_detector.monitor import ARPMonitor
+
+    monitor = ARPMonitor(cfg.arp_detector, cfg.network)
+
+    iface_label = cfg.network.interface or "auto-detect"
+    gateway_label = cfg.arp_detector.gateway_ip or "(not set)"
+    trusted_label = ", ".join(cfg.arp_detector.trusted_ips) or "(none)"
 
     console.print(
         Panel(
-            Text(
-                "ARP Spoofing Detector will be fully implemented in Phase 4.\n"
-                f"Interface : {cfg.network.interface or 'auto-detect'}\n"
-                f"Interval  : {cfg.arp_detector.check_interval}s\n"
-                f"Trusted   : {cfg.arp_detector.trusted_ips or '(none)'}",
-                style="yellow",
-            ),
-            title="[bold cyan]nst arp-watch[/bold cyan]",
+            f"Interface  : [cyan]{iface_label}[/cyan]\n"
+            f"Gateway IP : [cyan]{gateway_label}[/cyan]\n"
+            f"Trusted IPs: [cyan]{trusted_label}[/cyan]\n\n"
+            "Monitoring ARP traffic — press [bold]Ctrl+C[/bold] to stop.",
+            title="[bold cyan]ARP Spoofing Monitor — Started[/bold cyan]",
             border_style="cyan",
         )
     )
+
+    try:
+        monitor.start()
+    except KeyboardInterrupt:
+        pass
+    except InsufficientPermissionsError as exc:
+        err_console.print(
+            Panel(
+                f"[bold red]{exc}[/bold red]\n\nRe-run with: [bold]sudo nst arp-watch[/bold]",
+                title="[red]Permission Error[/red]",
+                border_style="red",
+            )
+        )
+        raise SystemExit(1)
+    except CaptureError as exc:
+        err_console.print(f"[red]ARP capture failed:[/red] {exc}")
+        raise SystemExit(1)
+    finally:
+        _print_arp_summary(monitor)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -374,6 +403,8 @@ def status(ctx: click.Context) -> None:
     table.add_row("", "trusted_ips",
                   ", ".join(cfg.arp_detector.trusted_ips)
                   or "[dim](none)[/dim]")
+    table.add_row("", "gateway_ip",
+                  cfg.arp_detector.gateway_ip or "[dim](none)[/dim]")
 
     table.add_row("logging", "level", cfg.logging.level)
     table.add_row("", "file", cfg.logging.file)
@@ -464,6 +495,54 @@ def _print_session_summary(packet_count: int, engine: "AnalysisEngine") -> None:
         for port, cnt in ports:
             port_table.add_row(str(port), str(cnt))
         console.print(port_table)
+
+
+def _print_arp_summary(monitor: "ARPMonitor") -> None:  # type: ignore[name-defined]
+    """Print ARP session statistics after arp-watch exits."""
+    from src.arp_detector.monitor import ARPMonitor as _AM  # local import
+
+    event_log = monitor.event_logger
+    alerts = monitor.alert_manager
+
+    console.print()
+    console.rule("[bold cyan]ARP Session Summary[/bold cyan]")
+
+    overview = Table.grid(padding=(0, 2))
+    overview.add_column(style="dim", no_wrap=True)
+    overview.add_column(style="bold white")
+    overview.add_row("ARP packets seen  :", str(monitor.packet_count))
+    overview.add_row("Total events      :", str(event_log.total))
+    overview.add_row("High-priority     :", f"[bold red]{len(event_log.high_priority_events())}[/bold red]")
+    overview.add_row("Alerts shown      :", f"[bold red]{alerts.total_alerts}[/bold red]")
+    overview.add_row("Critical alerts   :", f"[bold red]{alerts.critical_alerts}[/bold red]")
+    console.print(overview)
+    console.print()
+
+    entries = monitor.table.all_entries()
+    if not entries:
+        console.print("[dim]No ARP bindings observed.[/dim]")
+        return
+
+    arp_table = Table(
+        title="Observed ARP Bindings",
+        header_style="bold magenta",
+        border_style="bright_blue",
+        show_lines=False,
+    )
+    arp_table.add_column("IP Address", style="cyan", no_wrap=True)
+    arp_table.add_column("MAC Address", style="green")
+    arp_table.add_column("Packets", justify="right")
+    arp_table.add_column("Trusted", justify="center")
+
+    for entry in entries:
+        trusted_label = "[bold yellow]YES[/bold yellow]" if entry.is_trusted else ""
+        arp_table.add_row(
+            entry.ip,
+            entry.mac,
+            str(entry.packet_count),
+            trusted_label,
+        )
+    console.print(arp_table)
 
 
 def _require_root() -> None:
