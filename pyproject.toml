@@ -33,7 +33,7 @@ dependencies = [
 ]
 
 [project.scripts]
-nst = "src.cli.main:cli"
+nst = "src.cli.main:main"
 
 [tool.setuptools.packages.find]
 where = ["."]

@@ -15,7 +15,7 @@ from pathlib import Path
 # Allow `python main.py` to work without `pip install -e .`
 sys.path.insert(0, str(Path(__file__).parent))
 
-from src.cli.main import cli
+from src.cli.main import main
 
 if __name__ == "__main__":
-    cli()
+    main()

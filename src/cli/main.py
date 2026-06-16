@@ -14,22 +14,27 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 import click
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
-from rich.text import Text
 
 from src.cli.banner import print_banner
 from src.core.config import AppConfig
 from src.core.exceptions import (
     CaptureError,
+    ConfigurationError,
     InsufficientPermissionsError,
     InterfaceError,
+    NetworkToolkitError,
 )
 from src.core.logger import get_logger, setup_logging
+
+if TYPE_CHECKING:
+    from src.analyzer.engine import AnalysisEngine
+    from src.arp_detector.monitor import ARPMonitor
 
 console = Console()
 err_console = Console(stderr=True)
@@ -88,7 +93,18 @@ def cli(ctx: click.Context, config_path: Optional[Path], debug: bool) -> None:
     """
     ctx.ensure_object(dict)
 
-    app_config = AppConfig.load(config_path=config_path)
+    try:
+        app_config = AppConfig.load(config_path=config_path)
+    except ConfigurationError as exc:
+        err_console.print(
+            Panel(
+                f"[bold red]{exc}[/bold red]",
+                title="[red]Configuration Error[/red]",
+                border_style="red",
+            )
+        )
+        raise SystemExit(1)
+
     if debug:
         app_config.logging.level = "DEBUG"
 
@@ -173,7 +189,7 @@ def sniff(
     capture = PacketCapture(cfg.sniffer, cfg.network)
     engine = AnalysisEngine(cfg.analyzer)
 
-    def on_packet(pkt: object) -> None:  # type: ignore[type-arg]
+    def on_packet(pkt: object) -> None:
         from scapy.packet import Packet as ScapyPacket
 
         if not isinstance(pkt, ScapyPacket):
@@ -418,10 +434,8 @@ def status(ctx: click.Context) -> None:
 # Helpers
 # ──────────────────────────────────────────────────────────────────────────────
 
-def _print_session_summary(packet_count: int, engine: "AnalysisEngine") -> None:  # type: ignore[name-defined]
+def _print_session_summary(packet_count: int, engine: "AnalysisEngine") -> None:
     """Print a Rich statistics table after the capture session ends."""
-    from src.analyzer.engine import AnalysisEngine as _AE  # local import avoids circular
-
     stats = engine.stats
     alerts = engine.alerts
 
@@ -497,10 +511,8 @@ def _print_session_summary(packet_count: int, engine: "AnalysisEngine") -> None:
         console.print(port_table)
 
 
-def _print_arp_summary(monitor: "ARPMonitor") -> None:  # type: ignore[name-defined]
+def _print_arp_summary(monitor: "ARPMonitor") -> None:
     """Print ARP session statistics after arp-watch exits."""
-    from src.arp_detector.monitor import ARPMonitor as _AM  # local import
-
     event_log = monitor.event_logger
     alerts = monitor.alert_manager
 
@@ -512,7 +524,8 @@ def _print_arp_summary(monitor: "ARPMonitor") -> None:  # type: ignore[name-defi
     overview.add_column(style="bold white")
     overview.add_row("ARP packets seen  :", str(monitor.packet_count))
     overview.add_row("Total events      :", str(event_log.total))
-    overview.add_row("High-priority     :", f"[bold red]{len(event_log.high_priority_events())}[/bold red]")
+    high_priority_count = len(event_log.high_priority_events())
+    overview.add_row("High-priority     :", f"[bold red]{high_priority_count}[/bold red]")
     overview.add_row("Alerts shown      :", f"[bold red]{alerts.total_alerts}[/bold red]")
     overview.add_row("Critical alerts   :", f"[bold red]{alerts.critical_alerts}[/bold red]")
     console.print(overview)
@@ -562,5 +575,33 @@ def _require_root() -> None:
                 title="[red]Permission Error[/red]",
                 border_style="red",
             )
+        )
+        raise SystemExit(1)
+
+
+def main() -> None:
+    """
+    Top-level entry point used by both `python main.py` and the
+    installed `nst` console script (see pyproject.toml).
+
+    Every command already handles its own expected failure modes
+    (permission errors, capture errors, config errors) with friendly
+    Rich panels. This wrapper is the last line of defense: it catches
+    any NetworkToolkitError or unexpected exception that escapes a
+    command so the user never sees a raw Python traceback, while still
+    logging the full exception for post-mortem debugging.
+    """
+    try:
+        cli()
+    except NetworkToolkitError as exc:
+        err_console.print(f"[red]Error:[/red] {exc}")
+        raise SystemExit(1)
+    except KeyboardInterrupt:
+        raise SystemExit(130)
+    except Exception:
+        logger.exception("Unhandled exception")
+        err_console.print(
+            "[bold red]An unexpected error occurred.[/bold red] "
+            "See the log file for details."
         )
         raise SystemExit(1)
