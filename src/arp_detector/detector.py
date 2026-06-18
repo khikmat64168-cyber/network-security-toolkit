@@ -32,7 +32,7 @@ from __future__ import annotations
 
 from collections import Counter
 from datetime import datetime
-from typing import List, Optional, Set
+from typing import Any, List, Optional, Set
 
 from src.arp_detector.events import ARPEvent, ARPEventType
 from src.arp_detector.table import ARPTable
@@ -67,7 +67,7 @@ class SpoofingDetector:
 
     # ── Public API ──────────────────────────────────────────────────────────
 
-    def analyze(self, arp) -> List[ARPEvent]:
+    def analyze(self, arp: Any) -> List[ARPEvent]:
         """
         Analyse one Scapy ARP layer and return all detected anomalies.
 

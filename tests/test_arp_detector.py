@@ -18,12 +18,10 @@ from types import SimpleNamespace
 from typing import Optional
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from src.arp_detector.alerts import ARPAlertManager
 from src.arp_detector.detector import SpoofingDetector
 from src.arp_detector.events import ARPEvent, ARPEventType, EventLogger
-from src.arp_detector.table import ARPEntry, ARPTable, get_system_arp_cache
+from src.arp_detector.table import ARPTable
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -256,14 +254,16 @@ class TestSpoofingDetector:
 
     def test_gratuitous_arp_detected_when_psrc_equals_pdst(self) -> None:
         det = self._detector()
-        events = det.analyze(_arp(op=2, psrc="10.0.0.5", hwsrc="aa:bb:cc:dd:ee:05", pdst="10.0.0.5"))
+        arp = _arp(op=2, psrc="10.0.0.5", hwsrc="aa:bb:cc:dd:ee:05", pdst="10.0.0.5")
+        events = det.analyze(arp)
         grat = [e for e in events if e.event_type == ARPEventType.GRATUITOUS_ARP]
         assert len(grat) == 1
         assert grat[0].severity == "medium"
 
     def test_gratuitous_arp_not_triggered_for_op1(self) -> None:
         det = self._detector()
-        events = det.analyze(_arp(op=1, psrc="10.0.0.5", hwsrc="aa:bb:cc:dd:ee:05", pdst="10.0.0.5"))
+        arp = _arp(op=1, psrc="10.0.0.5", hwsrc="aa:bb:cc:dd:ee:05", pdst="10.0.0.5")
+        events = det.analyze(arp)
         grat = [e for e in events if e.event_type == ARPEventType.GRATUITOUS_ARP]
         assert len(grat) == 0
 

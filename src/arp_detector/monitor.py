@@ -24,11 +24,11 @@ _stop_event, the next packet (or the timeout) causes sniff() to return.
 from __future__ import annotations
 
 import threading
-from typing import Optional
+from typing import Any
 
 from src.arp_detector.alerts import ARPAlertManager
 from src.arp_detector.detector import SpoofingDetector
-from src.arp_detector.events import ARPEvent, EventLogger
+from src.arp_detector.events import EventLogger
 from src.arp_detector.table import ARPTable
 from src.core.config import ArpDetectorConfig, NetworkConfig
 from src.core.exceptions import CaptureError, InsufficientPermissionsError
@@ -81,7 +81,7 @@ class ARPMonitor:
         raw socket (requires root / CAP_NET_RAW).
         Raises CaptureError for other Scapy / OS failures.
         """
-        from scapy.sendrecv import sniff  # type: ignore[import]
+        from scapy.sendrecv import sniff
 
         # Pre-populate the table from the OS ARP cache so we start with
         # a known-good baseline rather than treating every entry as new.
@@ -131,9 +131,9 @@ class ARPMonitor:
 
     # ── Internal ────────────────────────────────────────────────────────────
 
-    def _on_packet(self, packet) -> None:
+    def _on_packet(self, packet: Any) -> None:
         """Scapy prn callback — called from the sniff loop for every packet."""
-        from scapy.layers.l2 import ARP  # type: ignore[import]
+        from scapy.layers.l2 import ARP
 
         if not packet.haslayer(ARP):
             return
