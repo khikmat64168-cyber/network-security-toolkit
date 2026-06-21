@@ -86,6 +86,7 @@ def cli(ctx: click.Context, config_path: Optional[Path], debug: bool) -> None:
     Subcommands:
       sniff       Capture and analyse packets in real time
       arp-watch   Detect ARP spoofing and MITM attacks
+      dashboard   Live traffic dashboard with real-time statistics
       interfaces  List available network interfaces
       status      Show current configuration
 
@@ -314,6 +315,95 @@ def arp_watch(
         raise SystemExit(1)
     finally:
         _print_arp_summary(monitor)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# `nst dashboard`
+# ──────────────────────────────────────────────────────────────────────────────
+
+@cli.command("dashboard")
+@click.option("-i", "--interface", default=None, metavar="IFACE",
+              help="Network interface to capture on (default: auto-detect).")
+@click.option("-c", "--count", default=0, type=click.IntRange(min=0),
+              show_default=True,
+              help="Packets to capture before stopping (0 = unlimited).")
+@click.option("-f", "--filter", "bpf_filter", default="", metavar="EXPR",
+              help='BPF filter expression (e.g. "tcp port 80").')
+@click.option("--refresh-rate", default=4, type=click.IntRange(min=1, max=60),
+              show_default=True,
+              help="Dashboard refresh rate in renders/second.")
+@click.pass_context
+def dashboard(
+    ctx: click.Context,
+    interface: Optional[str],
+    count: int,
+    bpf_filter: str,
+    refresh_rate: int,
+) -> None:
+    """Live traffic dashboard — real-time protocol and IP statistics."""
+    _require_root()
+    cfg: AppConfig = ctx.obj["config"]
+
+    if interface:
+        cfg.network.interface = interface
+    if count:
+        cfg.sniffer.packet_count = count
+    if bpf_filter:
+        cfg.sniffer.filter = bpf_filter
+
+    from src.analyzer.engine import AnalysisEngine
+    from src.dashboard.display import DashboardDisplay
+    from src.sniffer.capture import PacketCapture
+    from src.sniffer.interface import InterfaceManager
+    from src.sniffer.parsers import ParserDispatcher
+
+    try:
+        resolved = InterfaceManager.resolve(cfg.network.interface)
+        cfg.network.interface = resolved
+    except InterfaceError as exc:
+        err_console.print(f"[red]Interface error:[/red] {exc}")
+        raise SystemExit(1)
+
+    capture = PacketCapture(cfg.sniffer, cfg.network)
+    engine = AnalysisEngine(cfg.analyzer)
+    display = DashboardDisplay(refresh_rate=refresh_rate)
+
+    try:
+        with display:
+            def on_packet(pkt: object) -> None:
+                from scapy.packet import Packet as ScapyPacket
+
+                if not isinstance(pkt, ScapyPacket):
+                    return
+                parsed = ParserDispatcher.dispatch(pkt)
+                prev_alerts = (
+                    engine.alerts.credential_count + engine.alerts.threat_count
+                )
+                engine.process(parsed)
+                display.record(parsed)
+                if (
+                    engine.alerts.credential_count + engine.alerts.threat_count
+                    > prev_alerts
+                ):
+                    display.record_alert()
+
+            capture.start(on_packet)
+    except KeyboardInterrupt:
+        pass
+    except InsufficientPermissionsError as exc:
+        err_console.print(
+            Panel(
+                f"[bold red]{exc}[/bold red]\n\nRe-run with: [bold]sudo nst dashboard[/bold]",
+                title="[red]Permission Error[/red]",
+                border_style="red",
+            )
+        )
+        raise SystemExit(1)
+    except CaptureError as exc:
+        err_console.print(f"[red]Capture failed:[/red] {exc}")
+        raise SystemExit(1)
+    finally:
+        _print_session_summary(capture.packet_count, engine)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
