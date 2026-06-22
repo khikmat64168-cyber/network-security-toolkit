@@ -89,6 +89,14 @@ class ArpDetectorConfig:
 
 
 @dataclass
+class DNSDetectorConfig:
+    """Settings for the DNS spoofing detection module."""
+
+    trusted_domains: List[str] = field(default_factory=list)
+    track_queries: bool = True
+
+
+@dataclass
 class LoggingConfig:
     """Settings that control the logging subsystem."""
 
@@ -122,6 +130,7 @@ class AppConfig:
     sniffer: SnifferConfig = field(default_factory=SnifferConfig)
     analyzer: AnalyzerConfig = field(default_factory=AnalyzerConfig)
     arp_detector: ArpDetectorConfig = field(default_factory=ArpDetectorConfig)
+    dns_detector: DNSDetectorConfig = field(default_factory=DNSDetectorConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
 
     # ------------------------------------------------------------------
@@ -153,6 +162,9 @@ class AppConfig:
             analyzer=_build_dataclass(AnalyzerConfig, raw.get("analyzer") or {}),
             arp_detector=_build_dataclass(
                 ArpDetectorConfig, raw.get("arp_detector") or {}
+            ),
+            dns_detector=_build_dataclass(
+                DNSDetectorConfig, raw.get("dns_detector") or {}
             ),
             logging=_build_dataclass(LoggingConfig, raw.get("logging") or {}),
         )

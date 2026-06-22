@@ -68,6 +68,17 @@ arp_detector:
   gateway_ip: null
 
 # ─────────────────────────────────────────────────────────────────
+dns_detector:
+  # Domain names that are unconditionally trusted and will never
+  # trigger a DNS-spoofing alert (e.g. known CDN domains with
+  # legitimate anycast IPs).
+  trusted_domains: []
+
+  # Track DNS query transaction IDs to detect unsolicited responses
+  # (DNS responses with no matching prior query).
+  track_queries: true
+
+# ─────────────────────────────────────────────────────────────────
 logging:
   # Root log level: DEBUG | INFO | WARNING | ERROR | CRITICAL
   # Override with env var NST_LOG_LEVEL=DEBUG
