@@ -35,6 +35,7 @@ from src.core.logger import get_logger, setup_logging
 if TYPE_CHECKING:
     from src.analyzer.engine import AnalysisEngine
     from src.arp_detector.monitor import ARPMonitor
+    from src.dns_detector.monitor import DNSMonitor
 
 console = Console()
 err_console = Console(stderr=True)
@@ -86,6 +87,7 @@ def cli(ctx: click.Context, config_path: Optional[Path], debug: bool) -> None:
     Subcommands:
       sniff       Capture and analyse packets in real time
       arp-watch   Detect ARP spoofing and MITM attacks
+      dns-watch   Detect DNS spoofing and cache poisoning
       dashboard   Live traffic dashboard with real-time statistics
       interfaces  List available network interfaces
       status      Show current configuration
@@ -315,6 +317,73 @@ def arp_watch(
         raise SystemExit(1)
     finally:
         _print_arp_summary(monitor)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# `nst dns-watch`
+# ──────────────────────────────────────────────────────────────────────────────
+
+@cli.command("dns-watch")
+@click.option("-i", "--interface", default=None, metavar="IFACE",
+              help="Network interface to monitor (default: auto-detect).")
+@click.option("--trusted-domain", "trusted_domains", multiple=True, metavar="DOMAIN",
+              help="Domain to treat as trusted; may be repeated.")
+@click.option("--no-query-tracking", is_flag=True, default=False,
+              help="Disable unsolicited-response detection.")
+@click.pass_context
+def dns_watch(
+    ctx: click.Context,
+    interface: Optional[str],
+    trusted_domains: tuple,
+    no_query_tracking: bool,
+) -> None:
+    """Monitor DNS traffic and detect spoofing / cache-poisoning attacks."""
+    _require_root()
+    cfg: AppConfig = ctx.obj["config"]
+
+    if interface:
+        cfg.network.interface = interface
+    if trusted_domains:
+        cfg.dns_detector.trusted_domains = list(trusted_domains)
+    if no_query_tracking:
+        cfg.dns_detector.track_queries = False
+
+    from src.dns_detector.monitor import DNSMonitor
+
+    monitor = DNSMonitor(cfg.dns_detector, cfg.network)
+
+    iface_label = cfg.network.interface or "auto-detect"
+    trusted_label = ", ".join(cfg.dns_detector.trusted_domains) or "(none)"
+
+    console.print(
+        Panel(
+            f"Interface       : [cyan]{iface_label}[/cyan]\n"
+            f"Trusted domains : [cyan]{trusted_label}[/cyan]\n"
+            f"Query tracking  : [cyan]{cfg.dns_detector.track_queries}[/cyan]\n\n"
+            "Monitoring DNS traffic — press [bold]Ctrl+C[/bold] to stop.",
+            title="[bold cyan]DNS Spoofing Monitor — Started[/bold cyan]",
+            border_style="cyan",
+        )
+    )
+
+    try:
+        monitor.start()
+    except KeyboardInterrupt:
+        pass
+    except InsufficientPermissionsError as exc:
+        err_console.print(
+            Panel(
+                f"[bold red]{exc}[/bold red]\n\nRe-run with: [bold]sudo nst dns-watch[/bold]",
+                title="[red]Permission Error[/red]",
+                border_style="red",
+            )
+        )
+        raise SystemExit(1)
+    except CaptureError as exc:
+        err_console.print(f"[red]DNS capture failed:[/red] {exc}")
+        raise SystemExit(1)
+    finally:
+        _print_dns_summary(monitor)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -646,6 +715,58 @@ def _print_arp_summary(monitor: "ARPMonitor") -> None:
             trusted_label,
         )
     console.print(arp_table)
+
+
+def _print_dns_summary(monitor: "DNSMonitor") -> None:
+    """Print DNS session statistics after dns-watch exits."""
+    event_log = monitor.event_logger
+    alerts = monitor.alert_manager
+
+    console.print()
+    console.rule("[bold cyan]DNS Session Summary[/bold cyan]")
+
+    overview = Table.grid(padding=(0, 2))
+    overview.add_column(style="dim", no_wrap=True)
+    overview.add_column(style="bold white")
+    overview.add_row("DNS packets seen :", str(monitor.packet_count))
+    overview.add_row("Total events     :", str(event_log.total))
+    overview.add_row(
+        "High-priority    :",
+        f"[bold red]{len(event_log.high_priority_events())}[/bold red]",
+    )
+    overview.add_row(
+        "Alerts shown     :",
+        f"[bold red]{alerts.total_alerts}[/bold red]",
+    )
+    console.print(overview)
+    console.print()
+
+    entries = monitor.table.all_entries()
+    if not entries:
+        console.print("[dim]No DNS resolutions observed.[/dim]")
+        return
+
+    dns_table = Table(
+        title="Observed DNS Resolutions",
+        header_style="bold magenta",
+        border_style="bright_blue",
+        show_lines=False,
+    )
+    dns_table.add_column("Domain", style="cyan")
+    dns_table.add_column("Current IP", style="green")
+    dns_table.add_column("Unique IPs", justify="right")
+    dns_table.add_column("Queries", justify="right")
+
+    for entry in entries:
+        ip_count = len(entry.ips_seen)
+        ip_style = "bold red" if ip_count > 1 else "green"
+        dns_table.add_row(
+            entry.domain,
+            entry.current_ip,
+            f"[{ip_style}]{ip_count}[/{ip_style}]",
+            str(entry.packet_count),
+        )
+    console.print(dns_table)
 
 
 def _require_root() -> None:
