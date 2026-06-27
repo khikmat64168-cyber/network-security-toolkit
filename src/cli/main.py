@@ -88,6 +88,7 @@ def cli(ctx: click.Context, config_path: Optional[Path], debug: bool) -> None:
       sniff       Capture and analyse packets in real time
       arp-watch   Detect ARP spoofing and MITM attacks
       dns-watch   Detect DNS spoofing and cache poisoning
+      tls-scan    Inspect TLS certificates for security issues
       dashboard   Live traffic dashboard with real-time statistics
       interfaces  List available network interfaces
       status      Show current configuration
@@ -384,6 +385,54 @@ def dns_watch(
         raise SystemExit(1)
     finally:
         _print_dns_summary(monitor)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# `nst tls-scan`
+# ──────────────────────────────────────────────────────────────────────────────
+
+@cli.command("tls-scan")
+@click.argument("hosts", nargs=-1, metavar="HOST[:PORT]")
+@click.option("--port", default=443, show_default=True, type=int,
+              help="Default port when not included in the HOST argument.")
+@click.option("--timeout", default=10, show_default=True, type=int,
+              help="Connection timeout in seconds per host.")
+@click.pass_context
+def tls_scan(
+    ctx: click.Context,
+    hosts: tuple,
+    port: int,
+    timeout: int,
+) -> None:
+    """Inspect TLS certificates — expiry, cipher, and version checks.
+
+    \b
+    Examples:
+      nst tls-scan github.com
+      nst tls-scan github.com:443 example.com:8443
+      nst tls-scan --timeout 5 github.com google.com
+    """
+    if not hosts:
+        err_console.print("[yellow]No hosts specified.  Pass at least one HOST[:PORT].[/yellow]")
+        raise SystemExit(1)
+
+    from src.tls_inspector import scanner
+    from src.tls_inspector.display import print_result, print_summary
+
+    results = []
+    for host_str in hosts:
+        host, scan_port = scanner.parse_host_port(host_str, default_port=port)
+        console.rule(f"[dim]{host}:{scan_port}[/dim]")
+        result = scanner.scan(host, port=scan_port, timeout=timeout)
+        print_result(result)
+        results.append(result)
+
+    print_summary(results)
+
+    has_critical = any(r.critical_count > 0 for r in results)
+    has_error    = any(r.error is not None for r in results)
+    if has_critical or has_error:
+        raise SystemExit(1)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
