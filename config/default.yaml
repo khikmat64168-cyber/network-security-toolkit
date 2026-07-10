@@ -79,6 +79,19 @@ dns_detector:
   track_queries: true
 
 # ─────────────────────────────────────────────────────────────────
+mac_detector:
+  # Number of NEW (previously unseen) MAC addresses that must appear
+  # within the sliding window to trigger a FLOOD_DETECTED alert.
+  flood_threshold: 50
+
+  # Width of the sliding time window in seconds.
+  window_secs: 5.0
+
+  # Maximum unique MACs to track.  When this limit is reached a single
+  # TABLE_OVERFLOW (critical) alert is emitted.
+  table_limit: 1000
+
+# ─────────────────────────────────────────────────────────────────
 logging:
   # Root log level: DEBUG | INFO | WARNING | ERROR | CRITICAL
   # Override with env var NST_LOG_LEVEL=DEBUG

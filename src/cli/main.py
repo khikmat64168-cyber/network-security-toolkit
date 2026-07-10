@@ -36,6 +36,7 @@ if TYPE_CHECKING:
     from src.analyzer.engine import AnalysisEngine
     from src.arp_detector.monitor import ARPMonitor
     from src.dns_detector.monitor import DNSMonitor
+    from src.mac_detector.monitor import MACMonitor
 
 console = Console()
 err_console = Console(stderr=True)
@@ -88,12 +89,16 @@ def cli(ctx: click.Context, config_path: Optional[Path], debug: bool) -> None:
       sniff       Capture and analyse packets in real time
       arp-watch   Detect ARP spoofing and MITM attacks
       dns-watch   Detect DNS spoofing and cache poisoning
+      mac-watch   Detect MAC flooding / CAM table overflow attacks
       tls-scan    Inspect TLS certificates for security issues
       dashboard   Live traffic dashboard with real-time statistics
       interfaces  List available network interfaces
       status      Show current configuration
 
     Most operations require root / sudo privileges.
+    \b
+    Most subcommands (sniff, arp-watch, dns-watch, mac-watch, dashboard)
+    require root / sudo.  tls-scan does not.
     """
     ctx.ensure_object(dict)
 
@@ -525,6 +530,66 @@ def dashboard(
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# `nst mac-watch`
+# ──────────────────────────────────────────────────────────────────────────────
+
+@cli.command("mac-watch")
+@click.option("-i", "--interface", default=None, metavar="IFACE",
+              help="Network interface to monitor (default: auto-detect).")
+@click.option("--threshold", default=None, type=click.IntRange(min=1),
+              metavar="N",
+              help="New MACs per window that trigger an alert (default from config).")
+@click.option("--window", default=None, type=click.FloatRange(min=0.5),
+              metavar="SECS",
+              help="Sliding window width in seconds (default from config).")
+@click.pass_context
+def mac_watch(
+    ctx: click.Context,
+    interface: Optional[str],
+    threshold: Optional[int],
+    window: Optional[float],
+) -> None:
+    """Monitor Ethernet frames and detect MAC flooding / CAM table overflow."""
+    _require_root()
+    cfg: AppConfig = ctx.obj["config"]
+
+    if interface:
+        cfg.network.interface = interface
+    if threshold is not None:
+        cfg.mac_detector.flood_threshold = threshold
+    if window is not None:
+        cfg.mac_detector.window_secs = window
+
+    from src.mac_detector.monitor import MACMonitor
+
+    monitor = MACMonitor(cfg.mac_detector, cfg.network)
+
+    iface_label = cfg.network.interface or "auto-detect"
+
+    console.print(
+        Panel(
+            f"Interface  : [cyan]{iface_label}[/cyan]\n"
+            f"Threshold  : [cyan]{cfg.mac_detector.flood_threshold} new MACs "
+            f"/ {cfg.mac_detector.window_secs:.1f}s window[/cyan]\n"
+            f"Table limit: [cyan]{cfg.mac_detector.table_limit}[/cyan]\n\n"
+            "Monitoring Ethernet frames — press [bold]Ctrl+C[/bold] to stop.",
+            title="[bold cyan]MAC Flooding Monitor — Started[/bold cyan]",
+            border_style="cyan",
+        )
+    )
+
+    try:
+        monitor.start()
+    except KeyboardInterrupt:
+        pass
+    except Exception as exc:
+        err_console.print(f"[red]MAC capture failed:[/red] {exc}")
+        raise SystemExit(1)
+    finally:
+        _print_mac_summary(monitor)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # `nst interfaces`
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -816,6 +881,56 @@ def _print_dns_summary(monitor: "DNSMonitor") -> None:
             str(entry.packet_count),
         )
     console.print(dns_table)
+
+
+def _print_mac_summary(monitor: "MACMonitor") -> None:
+    """Print MAC flooding session statistics after mac-watch exits."""
+    event_log = monitor.event_logger
+    alerts = monitor.alert_manager
+
+    console.print()
+    console.rule("[bold cyan]MAC Session Summary[/bold cyan]")
+
+    from src.mac_detector.events import MACEventType
+
+    overview = Table.grid(padding=(0, 2))
+    overview.add_column(style="dim", no_wrap=True)
+    overview.add_column(style="bold white")
+    overview.add_row("Packets seen     :", str(monitor.packet_count))
+    overview.add_row("Unique MACs seen :", str(monitor.table.total()))
+    overview.add_row("Flood events     :",
+                     str(event_log.count_by_type(MACEventType.FLOOD_DETECTED)))
+    overview.add_row("Overflow events  :",
+                     str(event_log.count_by_type(MACEventType.TABLE_OVERFLOW)))
+    overview.add_row(
+        "Alerts shown     :",
+        f"[bold red]{alerts.total_alerts}[/bold red]",
+    )
+    overview.add_row(
+        "Critical alerts  :",
+        f"[bold red]{alerts.critical_alerts}[/bold red]",
+    )
+    console.print(overview)
+    console.print()
+
+    entries = monitor.table.all_entries()
+    if not entries:
+        console.print("[dim]No MAC addresses observed.[/dim]")
+        return
+
+    top = sorted(entries, key=lambda e: e.packet_count, reverse=True)[:10]
+    mac_table = Table(
+        title="Top Source MAC Addresses",
+        header_style="bold magenta",
+        border_style="bright_blue",
+        show_lines=False,
+    )
+    mac_table.add_column("MAC Address", style="cyan", no_wrap=True)
+    mac_table.add_column("Packets", justify="right")
+
+    for entry in top:
+        mac_table.add_row(entry.mac, str(entry.packet_count))
+    console.print(mac_table)
 
 
 def _require_root() -> None:

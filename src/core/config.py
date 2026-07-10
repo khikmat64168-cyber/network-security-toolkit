@@ -97,6 +97,15 @@ class DNSDetectorConfig:
 
 
 @dataclass
+class MACDetectorConfig:
+    """Settings for the MAC flooding detection module."""
+
+    flood_threshold: int = 50
+    window_secs: float = 5.0
+    table_limit: int = 1000
+
+
+@dataclass
 class LoggingConfig:
     """Settings that control the logging subsystem."""
 
@@ -131,6 +140,7 @@ class AppConfig:
     analyzer: AnalyzerConfig = field(default_factory=AnalyzerConfig)
     arp_detector: ArpDetectorConfig = field(default_factory=ArpDetectorConfig)
     dns_detector: DNSDetectorConfig = field(default_factory=DNSDetectorConfig)
+    mac_detector: MACDetectorConfig = field(default_factory=MACDetectorConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
 
     # ------------------------------------------------------------------
@@ -165,6 +175,9 @@ class AppConfig:
             ),
             dns_detector=_build_dataclass(
                 DNSDetectorConfig, raw.get("dns_detector") or {}
+            ),
+            mac_detector=_build_dataclass(
+                MACDetectorConfig, raw.get("mac_detector") or {}
             ),
             logging=_build_dataclass(LoggingConfig, raw.get("logging") or {}),
         )
