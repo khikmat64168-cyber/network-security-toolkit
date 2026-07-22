@@ -37,6 +37,7 @@ if TYPE_CHECKING:
     from src.arp_detector.monitor import ARPMonitor
     from src.dns_detector.monitor import DNSMonitor
     from src.mac_detector.monitor import MACMonitor
+    from src.reporter.models import ReportData
 
 console = Console()
 err_console = Console(stderr=True)
@@ -91,6 +92,7 @@ def cli(ctx: click.Context, config_path: Optional[Path], debug: bool) -> None:
       dns-watch   Detect DNS spoofing and cache poisoning
       mac-watch   Detect MAC flooding / CAM table overflow attacks
       tls-scan    Inspect TLS certificates for security issues
+      report      Generate an HTML security report
       dashboard   Live traffic dashboard with real-time statistics
       interfaces  List available network interfaces
       status      Show current configuration
@@ -402,12 +404,20 @@ def dns_watch(
               help="Default port when not included in the HOST argument.")
 @click.option("--timeout", default=10, show_default=True, type=int,
               help="Connection timeout in seconds per host.")
+@click.option("--save-report", "report_path", default=None,
+              type=click.Path(path_type=Path),
+              metavar="FILE",
+              help="Save an HTML security report to FILE after scanning.")
+@click.option("--open", "open_browser", is_flag=True, default=False,
+              help="Open the report in the default browser (requires --save-report).")
 @click.pass_context
 def tls_scan(
     ctx: click.Context,
     hosts: tuple,
     port: int,
     timeout: int,
+    report_path: Optional[Path],
+    open_browser: bool,
 ) -> None:
     """Inspect TLS certificates — expiry, cipher, and version checks.
 
@@ -416,6 +426,7 @@ def tls_scan(
       nst tls-scan github.com
       nst tls-scan github.com:443 example.com:8443
       nst tls-scan --timeout 5 github.com google.com
+      nst tls-scan --save-report report.html --open github.com
     """
     if not hosts:
         err_console.print("[yellow]No hosts specified.  Pass at least one HOST[:PORT].[/yellow]")
@@ -434,9 +445,105 @@ def tls_scan(
 
     print_summary(results)
 
+    if report_path:
+        _write_report(results=results, output_path=report_path,
+                      open_browser=open_browser)
+
     has_critical = any(r.critical_count > 0 for r in results)
     has_error    = any(r.error is not None for r in results)
     if has_critical or has_error:
+        raise SystemExit(1)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# `nst report`
+# ──────────────────────────────────────────────────────────────────────────────
+
+@cli.command("report")
+@click.option("--tls", "tls_hosts", multiple=True, metavar="HOST[:PORT]",
+              help="TLS host to scan; may be repeated.")
+@click.option("--port", default=443, show_default=True, type=int,
+              help="Default TLS port when not included in HOST.")
+@click.option("--timeout", default=10, show_default=True, type=int,
+              help="TLS connection timeout per host in seconds.")
+@click.option("--no-interfaces", is_flag=True, default=False,
+              help="Skip network interface discovery.")
+@click.option("--output", "-o", "output_path", default=None,
+              type=click.Path(path_type=Path),
+              metavar="FILE",
+              help="Output HTML file (default: nst_report_<timestamp>.html).")
+@click.option("--open", "open_browser", is_flag=True, default=False,
+              help="Open the report in the default browser after writing.")
+@click.pass_context
+def report(
+    ctx: click.Context,
+    tls_hosts: tuple,
+    port: int,
+    timeout: int,
+    no_interfaces: bool,
+    output_path: Optional[Path],
+    open_browser: bool,
+) -> None:
+    """Generate a self-contained HTML security report.
+
+    \b
+    Examples:
+      nst report --tls github.com google.com --output report.html --open
+      nst report --tls github.com:443 --no-interfaces -o scan.html
+    """
+    from src.reporter.builder import ReportBuilder
+    from src.reporter.writer import default_output_path, write
+
+    builder = ReportBuilder()
+
+    if tls_hosts:
+        from src.tls_inspector import scanner
+        from src.tls_inspector.display import print_result
+
+        console.print(
+            Panel(
+                f"Scanning {len(tls_hosts)} host(s) — timeout {timeout}s per host.\n\n"
+                "Press [bold]Ctrl+C[/bold] to abort.",
+                title="[bold cyan]TLS Scan[/bold cyan]",
+                border_style="cyan",
+            )
+        )
+        results = []
+        for host_str in tls_hosts:
+            host, scan_port = scanner.parse_host_port(host_str, default_port=port)
+            console.rule(f"[dim]{host}:{scan_port}[/dim]")
+            result = scanner.scan(host, port=scan_port, timeout=timeout)
+            print_result(result)
+            results.append(result)
+        builder.add_tls_results(results)
+
+    if not no_interfaces:
+        builder.add_interfaces()
+
+    data = builder.build()
+
+    if output_path is None:
+        output_path = default_output_path(data)
+
+    out = write(data, output_path, open_browser=open_browser)
+
+    console.print()
+    console.print(
+        Panel(
+            f"[bold green]Report saved:[/bold green] [cyan]{out}[/cyan]\n\n"
+            f"TLS hosts scanned : [bold]{len(data.tls_findings)}[/bold]\n"
+            f"Interfaces listed : [bold]{len(data.interfaces)}[/bold]\n"
+            f"Critical issues   : [bold red]{data.critical_tls_count}[/bold red]\n"
+            + (
+                f"\n[dim]Opening in browser…[/dim]" if open_browser else
+                f"\n[dim]Open with:[/dim] open {out}"
+            ),
+            title="[bold green]Report Generated[/bold green]",
+            border_style="green",
+        )
+    )
+
+    if data.critical_tls_count > 0:
         raise SystemExit(1)
 
 
@@ -881,6 +988,22 @@ def _print_dns_summary(monitor: "DNSMonitor") -> None:
             str(entry.packet_count),
         )
     console.print(dns_table)
+
+
+def _write_report(
+    results: list,
+    output_path: Path,
+    open_browser: bool = False,
+) -> None:
+    """Build and write an HTML report from TLS scan results."""
+    from src.reporter.builder import ReportBuilder
+    from src.reporter.writer import write
+
+    data = ReportBuilder().add_tls_results(results).add_interfaces().build()
+    out = write(data, output_path, open_browser=open_browser)
+    console.print(
+        f"\n[bold green]Report saved:[/bold green] [cyan]{out}[/cyan]"
+    )
 
 
 def _print_mac_summary(monitor: "MACMonitor") -> None:
