@@ -93,6 +93,7 @@ def cli(ctx: click.Context, config_path: Optional[Path], debug: bool) -> None:
       mac-watch   Detect MAC flooding / CAM table overflow attacks
       tls-scan    Inspect TLS certificates for security issues
       report      Generate an HTML security report
+      geoip       Look up geolocation for IP addresses or hostnames
       dashboard   Live traffic dashboard with real-time statistics
       interfaces  List available network interfaces
       status      Show current configuration
@@ -468,6 +469,8 @@ def tls_scan(
               help="TLS connection timeout per host in seconds.")
 @click.option("--no-interfaces", is_flag=True, default=False,
               help="Skip network interface discovery.")
+@click.option("--geo", "enable_geo", is_flag=True, default=False,
+              help="Add geolocation data to TLS findings (requires internet).")
 @click.option("--output", "-o", "output_path", default=None,
               type=click.Path(path_type=Path),
               metavar="FILE",
@@ -481,6 +484,7 @@ def report(
     port: int,
     timeout: int,
     no_interfaces: bool,
+    enable_geo: bool,
     output_path: Optional[Path],
     open_browser: bool,
 ) -> None:
@@ -489,7 +493,8 @@ def report(
     \b
     Examples:
       nst report --tls github.com google.com --output report.html --open
-      nst report --tls github.com:443 --no-interfaces -o scan.html
+      nst report --tls github.com:443 --geo -o scan.html
+      nst report --no-interfaces -o interfaces-only.html
     """
     from src.reporter.builder import ReportBuilder
     from src.reporter.writer import default_output_path, write
@@ -517,6 +522,11 @@ def report(
             results.append(result)
         builder.add_tls_results(results)
 
+        if enable_geo and results:
+            from src.geoip.client import GeoIPClient
+            console.print("[dim]Looking up geolocation data…[/dim]")
+            builder.add_geo(GeoIPClient())
+
     if not no_interfaces:
         builder.add_interfaces()
 
@@ -535,7 +545,7 @@ def report(
             f"Interfaces listed : [bold]{len(data.interfaces)}[/bold]\n"
             f"Critical issues   : [bold red]{data.critical_tls_count}[/bold red]\n"
             + (
-                f"\n[dim]Opening in browser…[/dim]" if open_browser else
+                "\n[dim]Opening in browser…[/dim]" if open_browser else
                 f"\n[dim]Open with:[/dim] open {out}"
             ),
             title="[bold green]Report Generated[/bold green]",
@@ -694,6 +704,35 @@ def mac_watch(
         raise SystemExit(1)
     finally:
         _print_mac_summary(monitor)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# `nst geoip`
+# ──────────────────────────────────────────────────────────────────────────────
+
+@cli.command("geoip")
+@click.argument("targets", nargs=-1, metavar="IP_OR_HOST")
+@click.pass_context
+def geoip(ctx: click.Context, targets: tuple) -> None:
+    """Look up geolocation for one or more IP addresses or hostnames.
+
+    \b
+    Examples:
+      nst geoip 8.8.8.8
+      nst geoip 8.8.8.8 1.1.1.1 github.com
+    """
+    if not targets:
+        err_console.print(
+            "[yellow]No targets specified.  Pass at least one IP address or hostname.[/yellow]"
+        )
+        raise SystemExit(1)
+
+    from src.geoip.client import GeoIPClient
+    from src.geoip.display import print_geo_table
+
+    client = GeoIPClient()
+    results = [client.lookup(t) for t in targets]
+    print_geo_table(results)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
