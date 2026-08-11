@@ -235,21 +235,38 @@ def _render_cards(data: ReportData) -> str:
 </div>"""
 
 
+def _geo_cell(finding: TLSFinding) -> str:
+    """Return HTML for the Location column of the TLS table."""
+    geo = finding.geo
+    if geo is None:
+        return '<span style="color:var(--muted)">—</span>'
+    if geo.is_private:
+        return '<span style="color:var(--muted)">🏠 Private</span>'
+    if not geo.success:
+        return '<span style="color:var(--muted)">Unknown</span>'
+    location = escape(geo.location)
+    flag = escape(geo.flag)
+    isp = escape(geo.isp) if geo.isp else ""
+    isp_html = f'<br><span style="font-size:11px;color:var(--muted)">{isp}</span>' if isp else ""
+    return f'{flag}&nbsp;{location}{isp_html}'
+
+
 def _render_tls_section(findings: list[TLSFinding]) -> str:
     cnt = len(findings)
     if cnt == 0:
         return ""
 
+    has_geo = any(f.geo is not None for f in findings)
+
     rows = ""
     for f in findings:
-        issues_html = ""
         if f.issues:
-            items = "".join(
-                f"<li>{escape(issue)}</li>" for issue in f.issues
-            )
+            items = "".join(f"<li>{escape(issue)}</li>" for issue in f.issues)
             issues_html = f'<ul class="issues">{items}</ul>'
         else:
             issues_html = '<span style="color:var(--ok)">None</span>'
+
+        geo_td = f"  <td>{_geo_cell(f)}</td>\n" if has_geo else ""
 
         rows += f"""
 <tr>
@@ -258,8 +275,10 @@ def _render_tls_section(findings: list[TLSFinding]) -> str:
   <td class="mono" style="color:var(--muted)">{escape(f.tls_version)}</td>
   <td class="mono" style="color:var(--muted);font-size:11px">{escape(f.cipher_suite)}</td>
   <td>{_expiry_cell(f.days_until_expiry, f.severity == "error")}</td>
-  <td style="min-width:220px">{issues_html}</td>
+{geo_td}  <td style="min-width:220px">{issues_html}</td>
 </tr>"""
+
+    geo_th = "  <th>Location</th>\n" if has_geo else ""
 
     return f"""
 <div class="section">
@@ -276,7 +295,7 @@ def _render_tls_section(findings: list[TLSFinding]) -> str:
           <th>TLS Version</th>
           <th>Cipher Suite</th>
           <th>Expiry</th>
-          <th>Issues</th>
+{geo_th}          <th>Issues</th>
         </tr>
       </thead>
       <tbody>{rows}

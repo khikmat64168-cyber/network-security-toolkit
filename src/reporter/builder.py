@@ -13,13 +13,23 @@ self so callers can chain:
 """
 from __future__ import annotations
 
+import socket
 from datetime import datetime
-from typing import TYPE_CHECKING, List
+from typing import TYPE_CHECKING, List, Optional
 
 from src.reporter.models import InterfaceInfo, ReportData, TLSFinding
 
 if TYPE_CHECKING:
+    from src.geoip.client import GeoIPClient
     from src.tls_inspector.result import TLSScanResult
+
+
+def _resolve_host(host: str) -> Optional[str]:
+    """Resolve *host* to an IP string; return None on failure."""
+    try:
+        return socket.gethostbyname(host)
+    except OSError:
+        return None
 
 
 def _tls_severity(result: "TLSScanResult") -> str:
@@ -95,6 +105,26 @@ class ReportBuilder:
                 )
         except Exception:
             pass
+        return self
+
+    # ── Geolocation ────────────────────────────────────────────────────────────
+
+    def add_geo(self, client: "GeoIPClient") -> "ReportBuilder":
+        """
+        Enrich existing TLS findings with geolocation data.
+
+        For each finding, the hostname is resolved to an IP and looked up
+        via *client*.  Failures are silently ignored — the finding's geo
+        field stays None.
+
+        Call AFTER add_tls_results() so there are findings to enrich.
+        """
+        for finding in self._data.tls_findings:
+            try:
+                ip = _resolve_host(finding.host) or finding.host
+                finding.geo = client.lookup(ip)
+            except Exception:
+                pass
         return self
 
     # ── Finalise ───────────────────────────────────────────────────────────────

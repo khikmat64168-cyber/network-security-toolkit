@@ -10,7 +10,10 @@ from __future__ import annotations
 import socket
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import List, Optional
+from typing import TYPE_CHECKING, List, Optional
+
+if TYPE_CHECKING:
+    from src.geoip.models import GeoResult
 
 
 @dataclass
@@ -23,9 +26,10 @@ class TLSFinding:
     cipher_suite: str
     subject: str
     issuer: str
-    days_until_expiry: Optional[int]   # None when scan failed
-    issues: List[str]                  # human-readable issue strings
-    severity: str                      # "ok"|"warning"|"high"|"critical"|"error"
+    days_until_expiry: Optional[int]        # None when scan failed
+    issues: List[str]                       # human-readable issue strings
+    severity: str                           # "ok"|"warning"|"high"|"critical"|"error"
+    geo: Optional[GeoResult] = None         # populated by ReportBuilder.add_geo()
 
     @property
     def label(self) -> str:
