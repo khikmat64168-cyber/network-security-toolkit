@@ -9,12 +9,12 @@ from datetime import datetime
 
 import pytest
 
-from src.analyzer.credentials import CredentialDetector, CredentialFinding
-from src.analyzer.engine import AnalysisEngine
-from src.analyzer.stats import TrafficStats
-from src.analyzer.threats import ThreatDetector, ThreatEvent
-from src.core.config import AnalyzerConfig
-from src.sniffer.parsers.base import ParsedPacket, Protocol
+from nst.analyzer.credentials import CredentialDetector, CredentialFinding
+from nst.analyzer.engine import AnalysisEngine
+from nst.analyzer.stats import TrafficStats
+from nst.analyzer.threats import ThreatDetector, ThreatEvent
+from nst.core.config import AnalyzerConfig
+from nst.sniffer.parsers.base import ParsedPacket, Protocol
 
 
 # ──────────────────────────────────────────────────────────────────────────────

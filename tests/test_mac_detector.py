@@ -8,6 +8,7 @@ Coverage
 * EventLogger                      (events.py)
 * FloodDetector                    (detector.py)
 * MACAlertManager                  (alerts.py)
+* MACMonitor                       (monitor.py)
 * mac-watch CLI smoke              (cli/main.py)
 """
 from __future__ import annotations
@@ -19,10 +20,13 @@ from unittest.mock import MagicMock, patch
 import pytest
 from click.testing import CliRunner
 
-from src.mac_detector.alerts import MACAlertManager
-from src.mac_detector.detector import FloodDetector, _FLOOD_COOLDOWN
-from src.mac_detector.events import EventLogger, MACEvent, MACEventType
-from src.mac_detector.table import MACEntry, MACTable, _is_broadcast_or_multicast
+from nst.core.config import MACDetectorConfig, NetworkConfig
+from nst.core.exceptions import CaptureError, InsufficientPermissionsError
+from nst.mac_detector.alerts import MACAlertManager
+from nst.mac_detector.detector import FloodDetector, _FLOOD_COOLDOWN
+from nst.mac_detector.events import EventLogger, MACEvent, MACEventType
+from nst.mac_detector.monitor import MACMonitor
+from nst.mac_detector.table import MACEntry, MACTable, _is_broadcast_or_multicast
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -305,19 +309,19 @@ class TestMACAlertManager:
 
     def test_show_alert_increments_total(self):
         mgr = MACAlertManager()
-        with patch("src.mac_detector.alerts._stderr"):
+        with patch("nst.mac_detector.alerts._stderr"):
             mgr.show_alert(_event(severity="high"))
         assert mgr.total_alerts == 1
 
     def test_critical_alert_increments_critical_count(self):
         mgr = MACAlertManager()
-        with patch("src.mac_detector.alerts._stderr"):
+        with patch("nst.mac_detector.alerts._stderr"):
             mgr.show_alert(_event(severity="critical"))
         assert mgr.critical_alerts == 1
 
     def test_high_alert_does_not_increment_critical(self):
         mgr = MACAlertManager()
-        with patch("src.mac_detector.alerts._stderr"):
+        with patch("nst.mac_detector.alerts._stderr"):
             mgr.show_alert(_event(severity="high"))
         assert mgr.critical_alerts == 0
 
@@ -326,9 +330,71 @@ class TestMACAlertManager:
 # CLI smoke tests
 # ──────────────────────────────────────────────────────────────────────────────
 
+class TestMACMonitor:
+    @staticmethod
+    def _monitor(threshold: int = 3) -> MACMonitor:
+        return MACMonitor(
+            MACDetectorConfig(flood_threshold=threshold, window_secs=60.0, table_limit=1000),
+            NetworkConfig(interface="lo0"),
+        )
+
+    @staticmethod
+    def _frame(mac: str):
+        from scapy.layers.inet import IP
+        from scapy.layers.l2 import Ether
+
+        return Ether(src=mac, dst="ff:ff:ff:ff:ff:ff") / IP()
+
+    def test_counts_every_packet(self) -> None:
+        from scapy.layers.inet import IP
+
+        monitor = self._monitor()
+        monitor._on_packet(self._frame("02:00:00:00:00:01"))
+        monitor._on_packet(IP())                       # no Ethernet layer
+        assert monitor.packet_count == 2
+        assert monitor.table.total() == 1
+
+    def test_flood_raises_event_and_alert(self) -> None:
+        monitor = self._monitor(threshold=3)
+        with patch.object(monitor.alert_manager, "show_alert") as show:
+            for i in range(5):
+                monitor._on_packet(self._frame(f"02:00:00:00:00:{i:02x}"))
+        assert monitor.event_logger.count_by_type(MACEventType.FLOOD_DETECTED) >= 1
+        assert show.called
+
+    def test_detector_errors_are_contained(self) -> None:
+        monitor = self._monitor()
+        with patch.object(monitor.detector, "analyze", side_effect=ValueError("bad")):
+            monitor._on_packet(self._frame("02:00:00:00:00:01"))
+        assert monitor.event_logger.count_by_type(MACEventType.FLOOD_DETECTED) == 0
+
+    def test_start_passes_interface_and_stop_filter(self) -> None:
+        monitor = self._monitor()
+        with patch("scapy.sendrecv.sniff") as sniff:
+            monitor.start()
+        kwargs = sniff.call_args.kwargs
+        assert kwargs["iface"] == "lo0"
+        assert kwargs["store"] is False
+        assert kwargs["stop_filter"](None) is False
+        monitor.stop()
+        assert kwargs["stop_filter"](None) is True
+
+    def test_permission_error_is_translated(self) -> None:
+        monitor = self._monitor()
+        with patch("scapy.sendrecv.sniff", side_effect=PermissionError("denied")):
+            with pytest.raises(InsufficientPermissionsError):
+                monitor.start()
+
+    def test_os_error_is_translated(self) -> None:
+        monitor = self._monitor()
+        with patch("scapy.sendrecv.sniff", side_effect=OSError("iface down")):
+            with pytest.raises(CaptureError):
+                monitor.start()
+
+
 class TestMACWatchCLI:
     def test_mac_watch_requires_root(self):
-        from src.cli.main import cli
+        from nst.cli.main import cli
 
         runner = CliRunner()
         with patch("os.geteuid", return_value=1000):
@@ -336,7 +402,7 @@ class TestMACWatchCLI:
         assert result.exit_code == 1
 
     def test_mac_watch_runs_and_exits_cleanly(self):
-        from src.cli.main import cli
+        from nst.cli.main import cli
 
         mock_monitor = MagicMock()
         mock_monitor.packet_count = 42
@@ -349,13 +415,13 @@ class TestMACWatchCLI:
 
         runner = CliRunner()
         with patch("os.geteuid", return_value=0), \
-             patch("src.mac_detector.monitor.MACMonitor", return_value=mock_monitor):
+             patch("nst.mac_detector.monitor.MACMonitor", return_value=mock_monitor):
             result = runner.invoke(cli, ["mac-watch"])
 
         assert result.exit_code == 0
 
     def test_mac_watch_threshold_option_applied(self):
-        from src.cli.main import cli
+        from nst.cli.main import cli
 
         mock_monitor = MagicMock()
         mock_monitor.packet_count = 0
@@ -374,7 +440,7 @@ class TestMACWatchCLI:
 
         runner = CliRunner()
         with patch("os.geteuid", return_value=0), \
-             patch("src.mac_detector.monitor.MACMonitor", side_effect=capture_init):
+             patch("nst.mac_detector.monitor.MACMonitor", side_effect=capture_init):
             runner.invoke(cli, ["mac-watch", "--threshold", "25"])
 
         assert captured_config.get("threshold") == 25

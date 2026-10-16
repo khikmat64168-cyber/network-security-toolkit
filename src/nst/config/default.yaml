@@ -1,0 +1,111 @@
+# ─────────────────────────────────────────────────────────────────
+# Network Security Toolkit — Default Application Configuration
+# ─────────────────────────────────────────────────────────────────
+# Bundled defaults, exposed as typed dataclasses (see
+# nst/core/config.py).  Don't edit this file in an installed copy —
+# copy it to ~/.config/nst/config.yaml (or pass --config FILE / set
+# NST_CONFIG) and change that instead.  Selected settings can also be
+# overridden with environment variables (see README.md → Configuration).
+# ─────────────────────────────────────────────────────────────────
+
+network:
+  # Network interface to capture on.
+  # null → Scapy will auto-select the default interface.
+  # Override with env var NST_INTERFACE=eth0
+  interface: null
+
+  # Enable promiscuous mode so the NIC captures all frames on the
+  # segment, not just frames addressed to this host.
+  promiscuous: true
+
+  # Seconds to wait for packets before giving up.
+  # 0 → run until the user presses Ctrl-C.
+  capture_timeout: 0
+
+# ─────────────────────────────────────────────────────────────────
+sniffer:
+  # Maximum number of packets to capture before stopping.
+  # 0 → unlimited.
+  packet_count: 0
+
+  # Berkeley Packet Filter expression applied to the capture.
+  # Examples: "tcp port 80", "udp", "arp", "host 192.168.1.1"
+  # Empty string → capture everything.
+  filter: ""
+
+  # Path to write a .pcap file.  null → do not write to disk.
+  output_file: null
+
+# ─────────────────────────────────────────────────────────────────
+analyzer:
+  # Scan cleartext packet payloads for credential keywords
+  # (passwords, usernames in FTP/Telnet/HTTP Basic Auth traffic).
+  detect_credentials: true
+
+  # How many distinct destination ports a single source IP must
+  # hit within the observation window before a port-scan alert
+  # is raised.
+  suspicious_port_scan_threshold: 10
+
+  # Print a Rich alert panel when suspicious activity is detected.
+  alert_on_suspicious: true
+
+# ─────────────────────────────────────────────────────────────────
+arp_detector:
+  # Seconds between consecutive ARP table snapshots.
+  check_interval: 1.0
+
+  # How many consecutive anomalous ARP replies from the same host
+  # must be observed before raising a critical alert.
+  alert_threshold: 3
+
+  # IP addresses that are unconditionally trusted and will never
+  # trigger an ARP-spoofing alert (e.g. known routers / gateways).
+  trusted_ips: []
+
+  # IP address of the default gateway.  When set, a MAC change for this
+  # IP raises a "critical" alert instead of "high".
+  # null → gateway protection is disabled.
+  gateway_ip: null
+
+# ─────────────────────────────────────────────────────────────────
+dns_detector:
+  # Domain names that are unconditionally trusted and will never
+  # trigger a DNS-spoofing alert (e.g. known CDN domains with
+  # legitimate anycast IPs).
+  trusted_domains: []
+
+  # Track DNS query transaction IDs to detect unsolicited responses
+  # (DNS responses with no matching prior query).
+  track_queries: true
+
+# ─────────────────────────────────────────────────────────────────
+mac_detector:
+  # Number of NEW (previously unseen) MAC addresses that must appear
+  # within the sliding window to trigger a FLOOD_DETECTED alert.
+  flood_threshold: 50
+
+  # Width of the sliding time window in seconds.
+  window_secs: 5.0
+
+  # Maximum unique MACs to track.  When this limit is reached a single
+  # TABLE_OVERFLOW (critical) alert is emitted.
+  table_limit: 1000
+
+# ─────────────────────────────────────────────────────────────────
+logging:
+  # Root log level: DEBUG | INFO | WARNING | ERROR | CRITICAL
+  # Override with env var NST_LOG_LEVEL=DEBUG
+  level: INFO
+
+  # Path to the rotating log file.  Relative paths are resolved
+  # against the user state directory: $XDG_STATE_HOME/nst/
+  # (default ~/.local/state/nst/).
+  file: network_toolkit.log
+
+  # Maximum size of one log file in bytes before rotation.
+  # 10 485 760 = 10 MB
+  max_bytes: 10485760
+
+  # Number of rotated backup files to retain alongside the active log.
+  backup_count: 5

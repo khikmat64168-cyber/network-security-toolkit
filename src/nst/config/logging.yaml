@@ -1,0 +1,28 @@
+# ─────────────────────────────────────────────────────────────────
+# Network Security Toolkit — Logging Configuration
+# ─────────────────────────────────────────────────────────────────
+# Loaded by nst/core/logger.py to configure per-module log levels.
+# Root level, log file path and rotation are set in the [logging]
+# section of default.yaml (or your own config file); this file only
+# tunes individual subsystems.
+# ─────────────────────────────────────────────────────────────────
+
+# Per-module log level overrides.
+# Useful for debugging a single subsystem while keeping the rest quiet.
+# Set a module to DEBUG here and relaunch — no code changes needed.
+module_levels:
+  nst.sniffer: INFO
+  nst.analyzer: INFO
+  nst.arp_detector: INFO
+  nst.dns_detector: INFO
+  nst.mac_detector: INFO
+  nst.tls_inspector: INFO
+  nst.geoip: INFO
+  nst.reporter: INFO
+  nst.dashboard: INFO
+  nst.cli: INFO
+  nst.core: INFO
+
+  # Silence noisy third-party libraries
+  scapy.runtime: WARNING
+  scapy.loading: WARNING

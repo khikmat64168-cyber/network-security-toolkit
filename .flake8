@@ -1,0 +1,6 @@
+[flake8]
+max-line-length = 100
+# E221/E241: the codebase aligns related assignments and table columns
+# into columns on purpose (see e.g. enum definitions and Rich tables).
+extend-ignore = E221, E241
+exclude = .git, .venv, __pycache__, build, dist, .mypy_cache, .pytest_cache

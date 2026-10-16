@@ -18,10 +18,10 @@ from types import SimpleNamespace
 from typing import Optional
 from unittest.mock import MagicMock, patch
 
-from src.arp_detector.alerts import ARPAlertManager
-from src.arp_detector.detector import SpoofingDetector
-from src.arp_detector.events import ARPEvent, ARPEventType, EventLogger
-from src.arp_detector.table import ARPTable
+from nst.arp_detector.alerts import ARPAlertManager
+from nst.arp_detector.detector import SpoofingDetector
+from nst.arp_detector.events import ARPEvent, ARPEventType, EventLogger
+from nst.arp_detector.table import ARPTable
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -139,7 +139,7 @@ class TestARPTable:
     def test_load_from_system_returns_count(self) -> None:
         table = ARPTable()
         with patch(
-            "src.arp_detector.table.get_system_arp_cache",
+            "nst.arp_detector.table.get_system_arp_cache",
             return_value={"192.168.1.1": "aa:bb:cc:dd:ee:ff"},
         ):
             count = table.load_from_system()
@@ -149,7 +149,7 @@ class TestARPTable:
     def test_load_from_system_empty_on_error(self) -> None:
         table = ARPTable()
         with patch(
-            "src.arp_detector.table.get_system_arp_cache",
+            "nst.arp_detector.table.get_system_arp_cache",
             return_value={},
         ):
             count = table.load_from_system()
@@ -318,7 +318,7 @@ class TestARPAlertManager:
         assert mgr.critical_alerts == 0
 
     def test_show_alert_increments_total(self) -> None:
-        import src.arp_detector.alerts as _alerts_mod
+        import nst.arp_detector.alerts as _alerts_mod
 
         orig = _alerts_mod._stderr
         _alerts_mod._stderr = MagicMock()
@@ -335,7 +335,7 @@ class TestARPAlertManager:
             _alerts_mod._stderr = orig
 
     def test_non_critical_alert_does_not_increment_critical_count(self) -> None:
-        import src.arp_detector.alerts as _alerts_mod
+        import nst.arp_detector.alerts as _alerts_mod
 
         orig = _alerts_mod._stderr
         _alerts_mod._stderr = MagicMock()

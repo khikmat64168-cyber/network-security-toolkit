@@ -20,12 +20,12 @@ from unittest.mock import MagicMock, patch
 import pytest
 from click.testing import CliRunner
 
-from src.geoip.client import GeoIPClient, _is_private
-from src.geoip.display import format_city, format_location
-from src.geoip.models import GeoResult
-from src.reporter.builder import ReportBuilder, _resolve_host
-from src.reporter.models import InterfaceInfo, ReportData, TLSFinding
-from src.reporter.renderer import render
+from nst.geoip.client import GeoIPClient, _is_private
+from nst.geoip.display import format_city, format_location
+from nst.geoip.models import GeoResult
+from nst.reporter.builder import ReportBuilder, _resolve_host
+from nst.reporter.models import InterfaceInfo, ReportData, TLSFinding
+from nst.reporter.renderer import render
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -265,7 +265,7 @@ class TestReportBuilderGeo:
         mock_client = MagicMock()
         mock_client.lookup.return_value = _ok_geo()
 
-        with patch("src.reporter.builder._resolve_host", return_value="140.82.114.3"):
+        with patch("nst.reporter.builder._resolve_host", return_value="140.82.114.3"):
             data = (
                 ReportBuilder()
                 .add_tls_results([self._make_tls_result("github.com")])
@@ -280,7 +280,7 @@ class TestReportBuilderGeo:
         mock_client = MagicMock()
         mock_client.lookup.side_effect = Exception("network error")
 
-        with patch("src.reporter.builder._resolve_host", return_value="1.2.3.4"):
+        with patch("nst.reporter.builder._resolve_host", return_value="1.2.3.4"):
             data = (
                 ReportBuilder()
                 .add_tls_results([self._make_tls_result()])
@@ -337,21 +337,21 @@ class TestRendererGeo:
 
 class TestGeoIPCLI:
     def test_geoip_no_args_exits_1(self):
-        from src.cli.main import cli
+        from nst.cli.main import cli
 
         runner = CliRunner()
         result = runner.invoke(cli, ["geoip"])
         assert result.exit_code == 1
 
     def test_geoip_private_ip_succeeds(self):
-        from src.cli.main import cli
+        from nst.cli.main import cli
 
         runner = CliRunner()
         result = runner.invoke(cli, ["geoip", "192.168.1.1"])
         assert result.exit_code == 0
 
     def test_geoip_mocked_public_ip(self):
-        from src.cli.main import cli
+        from nst.cli.main import cli
 
         api_data = {
             "status": "success", "country": "Germany", "countryCode": "DE",

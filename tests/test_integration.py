@@ -23,13 +23,13 @@ from scapy.layers.inet import IP, TCP, UDP
 from scapy.layers.l2 import ARP, Ether
 from scapy.packet import Raw
 
-from src.analyzer.engine import AnalysisEngine
-from src.arp_detector.events import ARPEventType
-from src.arp_detector.monitor import ARPMonitor
-from src.cli.main import cli
-from src.core.config import AnalyzerConfig, ArpDetectorConfig, AppConfig, NetworkConfig
-from src.core.logger import _reset_logging_for_testing, get_logger, setup_logging
-from src.sniffer.parsers import ParserDispatcher
+from nst.analyzer.engine import AnalysisEngine
+from nst.arp_detector.events import ARPEventType
+from nst.arp_detector.monitor import ARPMonitor
+from nst.cli.main import cli
+from nst.core.config import AnalyzerConfig, ArpDetectorConfig, AppConfig, NetworkConfig
+from nst.core.logger import _reset_logging_for_testing, get_logger, setup_logging
+from nst.sniffer.parsers import ParserDispatcher
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -181,7 +181,7 @@ class TestARPMonitorPipeline:
         net_cfg = NetworkConfig()
         monitor = ARPMonitor(arp_cfg, net_cfg)
         # Avoid seeding from the real OS ARP cache during tests.
-        with patch("src.arp_detector.table.get_system_arp_cache", return_value={}):
+        with patch("nst.arp_detector.table.get_system_arp_cache", return_value={}):
             monitor.table.load_from_system()
         return monitor
 

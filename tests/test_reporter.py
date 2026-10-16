@@ -19,10 +19,10 @@ from unittest.mock import MagicMock, patch
 import pytest
 from click.testing import CliRunner
 
-from src.reporter.builder import ReportBuilder, _tls_severity
-from src.reporter.models import InterfaceInfo, ReportData, TLSFinding
-from src.reporter.renderer import _badge, _expiry_cell, render
-from src.reporter.writer import default_output_path, write
+from nst.reporter.builder import ReportBuilder, _tls_severity
+from nst.reporter.models import InterfaceInfo, ReportData, TLSFinding
+from nst.reporter.renderer import _badge, _expiry_cell, render
+from nst.reporter.writer import default_output_path, write
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -197,7 +197,7 @@ class TestReportBuilder:
 
     def test_add_interfaces_skips_on_error(self):
         with patch(
-            "src.sniffer.interface.InterfaceManager.list_interfaces",
+            "nst.sniffer.interface.InterfaceManager.list_interfaces",
             side_effect=Exception("no scapy"),
         ):
             data = ReportBuilder().add_interfaces().build()
@@ -314,11 +314,11 @@ class TestWriter:
 
 class TestReportCLI:
     def test_report_no_args_generates_file(self, tmp_path: Path):
-        from src.cli.main import cli
+        from nst.cli.main import cli
 
         out = tmp_path / "report.html"
-        with patch("src.sniffer.interface.InterfaceManager.list_interfaces", return_value=[]), \
-             patch("src.sniffer.interface.InterfaceManager.get_default", return_value=""):
+        with patch("nst.sniffer.interface.InterfaceManager.list_interfaces", return_value=[]), \
+             patch("nst.sniffer.interface.InterfaceManager.get_default", return_value=""):
             runner = CliRunner()
             result = runner.invoke(cli, ["report", "--output", str(out)])
 
@@ -326,15 +326,15 @@ class TestReportCLI:
         assert out.exists()
 
     def test_report_with_tls_scans_hosts(self, tmp_path: Path):
-        from src.cli.main import cli
+        from nst.cli.main import cli
 
         mock_result = _mock_tls_result(host="example.com")
 
         out = tmp_path / "report.html"
-        with patch("src.tls_inspector.scanner.scan", return_value=mock_result), \
-             patch("src.tls_inspector.display.print_result"), \
-             patch("src.sniffer.interface.InterfaceManager.list_interfaces", return_value=[]), \
-             patch("src.sniffer.interface.InterfaceManager.get_default", return_value=""):
+        with patch("nst.tls_inspector.scanner.scan", return_value=mock_result), \
+             patch("nst.tls_inspector.display.print_result"), \
+             patch("nst.sniffer.interface.InterfaceManager.list_interfaces", return_value=[]), \
+             patch("nst.sniffer.interface.InterfaceManager.get_default", return_value=""):
             runner = CliRunner()
             result = runner.invoke(
                 cli, ["report", "--tls", "example.com", "--output", str(out)]
@@ -344,16 +344,16 @@ class TestReportCLI:
         assert out.exists()
 
     def test_tls_scan_save_report_creates_file(self, tmp_path: Path):
-        from src.cli.main import cli
+        from nst.cli.main import cli
 
         mock_result = _mock_tls_result(host="example.com")
         out = tmp_path / "tls_report.html"
 
-        with patch("src.tls_inspector.scanner.scan", return_value=mock_result), \
-             patch("src.tls_inspector.display.print_result"), \
-             patch("src.tls_inspector.display.print_summary"), \
-             patch("src.sniffer.interface.InterfaceManager.list_interfaces", return_value=[]), \
-             patch("src.sniffer.interface.InterfaceManager.get_default", return_value=""):
+        with patch("nst.tls_inspector.scanner.scan", return_value=mock_result), \
+             patch("nst.tls_inspector.display.print_result"), \
+             patch("nst.tls_inspector.display.print_summary"), \
+             patch("nst.sniffer.interface.InterfaceManager.list_interfaces", return_value=[]), \
+             patch("nst.sniffer.interface.InterfaceManager.get_default", return_value=""):
             runner = CliRunner()
             result = runner.invoke(
                 cli,

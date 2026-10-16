@@ -10,12 +10,12 @@ import pytest
 from scapy.layers.inet import IP, TCP, UDP
 from scapy.packet import Raw
 
-from src.sniffer.parsers import ParserDispatcher
-from src.sniffer.parsers.base import ParsedPacket, Protocol
-from src.sniffer.parsers.dns import DNSParser
-from src.sniffer.parsers.http import HTTPParser
-from src.sniffer.parsers.tcp import TCPParser
-from src.sniffer.parsers.udp import UDPParser
+from nst.sniffer.parsers import ParserDispatcher
+from nst.sniffer.parsers.base import ParsedPacket, Protocol
+from nst.sniffer.parsers.dns import DNSParser
+from nst.sniffer.parsers.http import HTTPParser
+from nst.sniffer.parsers.tcp import TCPParser
+from nst.sniffer.parsers.udp import UDPParser
 
 
 # ──────────────────────────────────────────────────────────────────────────────

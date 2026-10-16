@@ -19,13 +19,13 @@ from scapy.layers.dns import DNS, DNSQR, DNSRR
 from scapy.layers.inet import IP, UDP
 from scapy.layers.l2 import Ether
 
-from src.cli.main import cli
-from src.core.config import DNSDetectorConfig, NetworkConfig
-from src.dns_detector.alerts import DNSAlertManager
-from src.dns_detector.detector import DNSSpoofingDetector, _extract_a_records
-from src.dns_detector.events import DNSEvent, DNSEventType, EventLogger
-from src.dns_detector.monitor import DNSMonitor
-from src.dns_detector.table import DNSTable
+from nst.cli.main import cli
+from nst.core.config import DNSDetectorConfig, NetworkConfig
+from nst.dns_detector.alerts import DNSAlertManager
+from nst.dns_detector.detector import DNSSpoofingDetector, _extract_a_records
+from nst.dns_detector.events import DNSEvent, DNSEventType, EventLogger
+from nst.dns_detector.monitor import DNSMonitor
+from nst.dns_detector.table import DNSTable
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -364,7 +364,7 @@ class TestDNSMonitorOnPacket:
         assert monitor.event_logger.total == 0
 
     def test_ip_change_triggers_event_and_alert(self) -> None:
-        import src.dns_detector.alerts as _alerts_mod
+        import nst.dns_detector.alerts as _alerts_mod
 
         orig = _alerts_mod._stderr
         _alerts_mod._stderr = MagicMock()

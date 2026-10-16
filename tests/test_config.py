@@ -20,7 +20,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from src.core.config import (
+from nst.core.config import (
     AnalyzerConfig,
     AppConfig,
     ArpDetectorConfig,
@@ -28,7 +28,7 @@ from src.core.config import (
     NetworkConfig,
     SnifferConfig,
 )
-from src.core.exceptions import ConfigurationError
+from nst.core.exceptions import ConfigurationError
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -173,3 +173,55 @@ class TestAppConfigLoad:
         # regardless of whether config/default.yaml exists.
         cfg = AppConfig.load()
         assert isinstance(cfg, AppConfig)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# AppConfig — config file discovery
+# ──────────────────────────────────────────────────────────────────────────────
+
+class TestAppConfigDiscovery:
+    def test_bundled_defaults_are_loaded(self, monkeypatch: pytest.MonkeyPatch,
+                                         tmp_path: Path) -> None:
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+        monkeypatch.delenv("NST_CONFIG", raising=False)
+        from nst.core.paths import BUNDLED_CONFIG_FILE
+
+        bundled = yaml.safe_load(BUNDLED_CONFIG_FILE.read_text())
+        cfg = AppConfig.load()
+        assert cfg.mac_detector.flood_threshold == bundled["mac_detector"]["flood_threshold"]
+        assert cfg.logging.file == bundled["logging"]["file"]
+
+    def test_user_config_overrides_bundled(self, monkeypatch: pytest.MonkeyPatch,
+                                           tmp_path: Path) -> None:
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+        monkeypatch.delenv("NST_CONFIG", raising=False)
+        user_file = tmp_path / "nst" / "config.yaml"
+        user_file.parent.mkdir()
+        user_file.write_text("mac_detector:\n  flood_threshold: 7\n")
+        assert AppConfig.load().mac_detector.flood_threshold == 7
+
+    def test_nst_config_env_var_wins(self, monkeypatch: pytest.MonkeyPatch,
+                                     tmp_path: Path) -> None:
+        user_file = tmp_path / "nst" / "config.yaml"
+        user_file.parent.mkdir()
+        user_file.write_text("mac_detector:\n  flood_threshold: 7\n")
+        env_file = tmp_path / "env.yaml"
+        env_file.write_text("mac_detector:\n  flood_threshold: 99\n")
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+        monkeypatch.setenv("NST_CONFIG", str(env_file))
+        assert AppConfig.load().mac_detector.flood_threshold == 99
+
+    def test_nst_config_pointing_nowhere_raises(self, monkeypatch: pytest.MonkeyPatch,
+                                                tmp_path: Path) -> None:
+        monkeypatch.setenv("NST_CONFIG", str(tmp_path / "missing.yaml"))
+        with pytest.raises(ConfigurationError, match="not found"):
+            AppConfig.load()
+
+    def test_explicit_path_beats_env_var(self, monkeypatch: pytest.MonkeyPatch,
+                                         tmp_path: Path) -> None:
+        env_file = tmp_path / "env.yaml"
+        env_file.write_text("logging:\n  level: ERROR\n")
+        explicit = tmp_path / "explicit.yaml"
+        explicit.write_text("logging:\n  level: WARNING\n")
+        monkeypatch.setenv("NST_CONFIG", str(env_file))
+        assert AppConfig.load(config_path=explicit).logging.level == "WARNING"

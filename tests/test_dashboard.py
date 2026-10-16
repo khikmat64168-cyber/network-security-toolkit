@@ -13,10 +13,11 @@ from unittest.mock import patch
 
 from click.testing import CliRunner
 
-from src.cli.main import cli
-from src.dashboard.renderer import _fmt_bytes, render
-from src.dashboard.stats import DashboardSnapshot, DashboardStats
-from src.sniffer.parsers.base import ParsedPacket, Protocol
+from nst.cli.main import cli
+from nst.dashboard.display import DashboardDisplay
+from nst.dashboard.renderer import _fmt_bytes, render
+from nst.dashboard.stats import DashboardSnapshot, DashboardStats
+from nst.sniffer.parsers.base import ParsedPacket, Protocol
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -204,3 +205,30 @@ class TestDashboardCLI:
         result = runner.invoke(cli, ["--help"])
         assert result.exit_code == 0
         assert "dashboard" in result.output
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# DashboardDisplay
+# ──────────────────────────────────────────────────────────────────────────────
+
+class TestDashboardDisplay:
+    def test_context_manager_drives_live(self) -> None:
+        with patch("nst.dashboard.display.Live") as live_cls:
+            display = DashboardDisplay(refresh_rate=2)
+            live = live_cls.return_value
+            with display as entered:
+                assert entered is display
+            live.__enter__.assert_called_once()
+            live.__exit__.assert_called_once_with(None, None, None)
+            assert live_cls.call_args.kwargs["refresh_per_second"] == 2
+
+    def test_record_updates_stats_and_view(self) -> None:
+        with patch("nst.dashboard.display.Live") as live_cls:
+            display = DashboardDisplay()
+            display.record(_pkt())
+            display.record_alert()
+            live = live_cls.return_value
+        assert live.update.called
+        snap = display.snapshot()
+        assert snap.total_packets == 1
+        assert display.stats is display._stats

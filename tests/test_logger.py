@@ -14,9 +14,10 @@ import logging
 from pathlib import Path
 
 import pytest
+from unittest.mock import patch
 
-from src.core.config import LoggingConfig
-from src.core.logger import (
+from nst.core.config import LoggingConfig
+from nst.core.logger import (
     _reset_logging_for_testing,
     get_logger,
     setup_logging,
@@ -59,7 +60,7 @@ class TestSetupLogging:
     def test_is_idempotent(self, reset_logging: None) -> None:
         """Calling setup_logging twice must not add duplicate handlers."""
         _reset_logging_for_testing()
-        import src.core.logger as logger_module
+        import nst.core.logger as logger_module
 
         setup_logging()
         handlers_after_first = len(logging.getLogger().handlers)
@@ -70,10 +71,65 @@ class TestSetupLogging:
         assert handlers_after_first == handlers_after_second
 
     def test_reset_clears_initialized_flag(self, reset_logging: None) -> None:
-        import src.core.logger as logger_module
+        import nst.core.logger as logger_module
 
         setup_logging()
         assert logger_module._initialized is True
 
         _reset_logging_for_testing()
         assert logger_module._initialized is False
+
+
+class TestExplicitConfig:
+    def test_explicit_config_replaces_implicit_bootstrap(
+        self, tmp_path: Path, reset_logging: None
+    ) -> None:
+        """get_logger() at import time must not swallow the CLI's config."""
+        _reset_logging_for_testing()
+        get_logger("nst.bootstrap")            # implicit defaults
+        setup_logging(LoggingConfig(level="DEBUG", file=str(tmp_path / "x.log")))
+
+        rich = [h for h in logging.getLogger().handlers if type(h).__name__ == "RichHandler"]
+        assert [h.level for h in rich] == [logging.DEBUG]
+
+    def test_second_explicit_config_is_noop(
+        self, tmp_path: Path, reset_logging: None
+    ) -> None:
+        _reset_logging_for_testing()
+        setup_logging(LoggingConfig(level="WARNING", file=str(tmp_path / "a.log")))
+        setup_logging(LoggingConfig(level="DEBUG", file=str(tmp_path / "b.log")))
+
+        rich = [h for h in logging.getLogger().handlers if type(h).__name__ == "RichHandler"]
+        assert [h.level for h in rich] == [logging.WARNING]
+        assert not (tmp_path / "b.log").exists()
+
+    def test_relative_file_goes_to_state_dir(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reset_logging: None
+    ) -> None:
+        monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+        _reset_logging_for_testing()
+        setup_logging(LoggingConfig(file="rel/nst.log"))
+        assert (tmp_path / "nst" / "rel" / "nst.log").exists()
+
+    def test_unwritable_log_falls_back_to_console(
+        self, tmp_path: Path, reset_logging: None
+    ) -> None:
+        log_file = tmp_path / "locked.log"
+        log_file.touch()
+        _reset_logging_for_testing()
+        with patch("os.access", return_value=False):
+            setup_logging(LoggingConfig(file=str(log_file)))
+
+        kinds = {type(h).__name__ for h in logging.getLogger().handlers}
+        assert kinds == {"RichHandler"}
+
+    def test_uncreatable_log_dir_falls_back_to_console(
+        self, tmp_path: Path, reset_logging: None
+    ) -> None:
+        blocker = tmp_path / "file-not-dir"
+        blocker.write_text("")
+        _reset_logging_for_testing()
+        setup_logging(LoggingConfig(file=str(blocker / "x.log")))
+
+        kinds = {type(h).__name__ for h in logging.getLogger().handlers}
+        assert kinds == {"RichHandler"}
