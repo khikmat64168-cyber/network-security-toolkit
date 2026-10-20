@@ -56,7 +56,7 @@ from_release() {
   fi
   local name="networkscan-front-$tag.tar.gz"
   local base="https://github.com/$REPO/releases/download/$tag"
-  local tmp
+  # Global, not local: the EXIT trap runs after this function has returned.
   tmp="$(mktemp -d)"
   trap 'rm -rf "$tmp"' EXIT
 
