@@ -12,6 +12,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING, List, Optional
 
+from nst import __version__
+
 if TYPE_CHECKING:
     from nst.geoip.models import GeoResult
 
@@ -55,7 +57,7 @@ class ReportData:
     """
 
     generated_at: datetime
-    toolkit_version: str = "1.0.0"
+    toolkit_version: str = __version__
     hostname: str = field(default_factory=socket.gethostname)
 
     tls_findings: List[TLSFinding] = field(default_factory=list)

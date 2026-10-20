@@ -2,6 +2,16 @@
 
 All notable changes to this project are documented in this file.
 
+## [1.0.1]
+
+### Fixed
+- Release workflow triggers the Coolify deployment with a POST; Coolify
+  4.4+ rejects a GET on `/api/v1/deploy` with 405
+- `scripts/fetch_frontend.sh --release` no longer exits non-zero after a
+  successful install (its cleanup trap tripped `set -u`)
+- CLI banner and HTML reports take the version from `nst.__version__`
+  instead of a hard-coded `1.0.0`
+
 ## [1.0.0] — Initial Release
 
 ### Packet Sniffer & Analyzer (`nst sniff`)

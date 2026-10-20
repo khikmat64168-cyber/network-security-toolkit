@@ -8,6 +8,8 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.text import Text
 
+from nst import __version__
+
 _BANNER_ART = """\
  ███╗   ██╗███████╗████████╗
  ████╗  ██║██╔════╝╚══██╔══╝
@@ -15,7 +17,7 @@ _BANNER_ART = """\
  ██║╚██╗██║╚════██║   ██║
  ██║ ╚████║███████║   ██║
  ╚═╝  ╚═══╝╚══════╝   ╚═╝
-  Network Security Toolkit  v1.0.0"""
+  Network Security Toolkit  v{version}""".format(version=__version__)
 
 _SUBTITLE = (
     "  [dim]Packet Sniffer[/dim]  [bright_blue]•[/bright_blue]  "

@@ -97,7 +97,8 @@ jobs:
           WEBHOOK: ${{ secrets.COOLIFY_DEPLOY_WEBHOOK }}
           TOKEN: ${{ secrets.COOLIFY_API_TOKEN }}
         run: |
-          curl -fsS --retry 3 -H "Authorization: Bearer $TOKEN" "$WEBHOOK"
+          # Coolify 4.4+ answers GET on /api/v1/deploy with 405; it must be a POST.
+          curl -fsS --retry 3 -X POST -H "Authorization: Bearer $TOKEN" "$WEBHOOK"
       - name: Wait for the new version
         env:
           PUBLIC_URL: ${{ vars.PUBLIC_URL }}
