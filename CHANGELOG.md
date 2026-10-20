@@ -2,6 +2,15 @@
 
 All notable changes to this project are documented in this file.
 
+## [1.0.2]
+
+### Fixed
+- Web console (Networkscan-front v1.0.1): a token pasted as the
+  `NST_WEB_TOKEN=…` line from the console's `.env`, quoted, or as a full
+  `#token=` link is accepted; anything else is refused on the token screen
+  instead of blanking the page when the browser rejects the WebSocket
+  subprotocol
+
 ## [1.0.1]
 
 ### Fixed
