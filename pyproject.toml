@@ -37,6 +37,13 @@ dependencies = [
     "cryptography>=42.0.0",
 ]
 
+[project.optional-dependencies]
+web = [
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+    "websockets>=12.0",
+]
+
 [project.urls]
 Homepage = "https://github.com/khikmat64168-cyber/network-security-toolkit"
 Issues = "https://github.com/khikmat64168-cyber/network-security-toolkit/issues"
@@ -52,7 +59,7 @@ where = ["src"]
 include = ["nst*"]
 
 [tool.setuptools.package-data]
-nst = ["config/*.yaml", "py.typed"]
+nst = ["config/*.yaml", "py.typed", "web/static/*", "web/static/assets/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -61,6 +68,10 @@ python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
 addopts = "-v --tb=short"
+filterwarnings = [
+    # Starlette's TestClient still works with httpx; silence its migration notice.
+    "ignore:Using `httpx` with `starlette.testclient` is deprecated",
+]
 
 [tool.black]
 line-length = 100

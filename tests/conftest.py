@@ -54,3 +54,22 @@ def reset_logging() -> Generator[None, None, None]:
 
     logger_module._initialized = original_initialized
     logger_module._explicit = original_explicit
+
+
+@pytest.fixture(autouse=True)
+def _no_live_capture(monkeypatch: pytest.MonkeyPatch) -> None:
+    """
+    Fail fast instead of sniffing real traffic.
+
+    On hosts where the user can open BPF devices without root (e.g.
+    macOS with Wireshark's ChmodBPF), an un-mocked capture would run
+    until killed.  Tests that exercise SniffLoop patch AsyncSniffer
+    themselves; this guard catches everything else.
+    """
+    import scapy.sendrecv
+
+    class _Forbidden:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            raise RuntimeError("live packet capture attempted in a test")
+
+    monkeypatch.setattr(scapy.sendrecv, "AsyncSniffer", _Forbidden)

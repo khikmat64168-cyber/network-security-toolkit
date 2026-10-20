@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
+import pytest
 from click.testing import CliRunner
 from scapy.layers.inet import IP, TCP, UDP
 from scapy.layers.l2 import ARP, Ether
@@ -231,6 +232,49 @@ class TestARPMonitorPipeline:
         )
         assert monitor.event_logger.total == 0
         assert monitor.alert_manager.total_alerts == 0
+
+
+class TestEventListeners:
+    """listener / console_alerts hooks used by the web dashboard."""
+
+    def test_engine_listener_receives_findings_silently(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        received: list = []
+        engine = AnalysisEngine(AnalyzerConfig(), listener=received.append,
+                                console_alerts=False)
+        payload = (b"GET / HTTP/1.1\r\nHost: x\r\n"
+                   b"Authorization: Basic YWRtaW46c2VjcmV0\r\n\r\n")
+        pkt = (Ether() / IP(src="10.0.0.5", dst="10.0.0.9")
+               / TCP(sport=40000, dport=80, flags="PA") / Raw(load=payload))
+        engine.process(ParserDispatcher.dispatch(pkt))
+
+        assert [type(f).__name__ for f in received] == ["CredentialFinding"]
+        assert engine.alerts.credential_count == 1
+        assert "Password :" not in capsys.readouterr().err   # no Rich alert panel
+
+    def test_engine_listener_error_is_contained(self) -> None:
+        def boom(_finding: object) -> None:
+            raise RuntimeError("listener bug")
+
+        engine = AnalysisEngine(AnalyzerConfig(suspicious_port_scan_threshold=2),
+                                listener=boom, console_alerts=False)
+        for port in (1, 2, 3):
+            pkt = Ether() / IP(src="10.0.0.5", dst="10.0.0.9") / TCP(dport=port, flags="S")
+            engine.process(ParserDispatcher.dispatch(pkt))
+        assert engine.alerts.threat_count >= 1
+
+    def test_arp_listener_receives_every_event(self) -> None:
+        received: list = []
+        monitor = ARPMonitor(ArpDetectorConfig(), NetworkConfig(),
+                             listener=received.append, console_alerts=False)
+        with patch.object(monitor.alert_manager, "show_alert") as show:
+            monitor._on_packet(Ether() / ARP(op=2, psrc="10.0.0.1",
+                                             hwsrc="aa:bb:cc:dd:ee:01", pdst="10.0.0.2"))
+            monitor._on_packet(Ether() / ARP(op=2, psrc="10.0.0.1",
+                                             hwsrc="aa:bb:cc:dd:ee:99", pdst="10.0.0.2"))
+        assert [e.event_type for e in received] == [ARPEventType.MAC_CHANGE]
+        show.assert_not_called()
 
 
 # ──────────────────────────────────────────────────────────────────────────────

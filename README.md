@@ -43,6 +43,15 @@ self-contained HTML security reports — all from a single `nst` command.
 - Weak public keys (RSA/DSA < 2048 bits, EC < 224 bits)
 - Works against hosts with invalid certificates — problems are reported, not raised
 
+### Web Console — `nst web`
+- Local browser console on `127.0.0.1` (loopback only, never exposed to the network)
+- Start and stop the traffic, ARP, DNS and MAC sensors per interface, with BPF filters for traffic
+- Live findings board over WebSocket: new findings stay highlighted until opened; each opens as a "pass" with the full evidence
+- Live traffic chart, protocol mix, top talkers and ports, recent packets; ARP / DNS / MAC tables from the running detectors
+- TLS scans, GeoIP lookups, and HTML reports viewed in a sandboxed frame
+- Capture permission is probed by really opening a capture socket; blocked and unavailable features are labelled as such
+- Plaintext passwords and raw credential lines are redacted before they reach the browser
+
 ### HTML Reports & GeoIP — `nst report`, `nst geoip`
 - Single-file HTML report with TLS findings and network interfaces
 - Optional country / ISP enrichment of TLS findings via ip-api.com
@@ -65,8 +74,15 @@ src/nst/
 ├── tls_inspector/  # TLS certificate retrieval and checks
 ├── geoip/          # Cached IP geolocation client
 ├── reporter/       # HTML report builder, renderer and writer
+├── web/            # `nst web`: FastAPI backend, sensors, event store, bundled UI
 └── cli/            # Click-based CLI and Rich UI
+
+scripts/fetch_frontend.sh   # installs the web console build into src/nst/web/static/
+frontend.version            # Networkscan-front release bundled by CI
 ```
+
+The web console's source lives in its own repository,
+[Networkscan-front](https://github.com/khikmat64168-cyber/Networkscan-front).
 
 Each detector follows the same shape: a `monitor` that owns the Scapy sniff
 loop, a pure `detector` that turns packets into typed events, a `table` of
@@ -163,6 +179,66 @@ so they can be used as checks in scripts.
 
 ---
 
+## Web Console
+
+```bash
+# Install with the web extra (FastAPI + uvicorn)
+pip install '.[web]'
+
+# Start the console; it opens the browser on a one-time tokenized link
+sudo .venv/bin/nst web
+
+# Other port / no browser
+nst web --port 9000 --no-browser
+```
+
+The console listens on loopback only (`127.0.0.1`, `::1` or `localhost`);
+any other bind address is refused. Each start prints a new link of the form
+`http://127.0.0.1:8765/#token=…`. The token sits in the URL fragment, so it is
+never sent in a request line or written to logs; the page moves it into
+session storage and removes it from the address bar. Every API call and the
+WebSocket must present it, requests with a non-loopback `Host` header are
+rejected (DNS-rebinding protection), and WebSocket connections must come
+from the console's own origin.
+
+Packet capture needs the same privileges as the CLI capture commands. The
+console checks this by opening a real capture socket rather than looking at
+the user id, so it is also correct on hosts where capture is granted without
+root (Linux `CAP_NET_RAW`, macOS `access_bpf`). TLS scans, GeoIP and reports
+work without capture rights.
+
+Reports generated from the console are stored in `~/.local/state/nst/reports/`.
+
+### Getting the web console
+
+The console's source is the separate
+[Networkscan-front](https://github.com/khikmat64168-cyber/Networkscan-front)
+repository. Its build is not committed here; put it in place with one of:
+
+```bash
+# the release pinned in frontend.version (what CI and releases use)
+./scripts/fetch_frontend.sh --release
+```
+
+```bash
+# a local checkout of Networkscan-front (Node 18.18+), for development
+./scripts/fetch_frontend.sh --from ../Networkscan-front
+```
+
+Without it, `nst web` still serves the API and shows a "frontend not built"
+page. For live frontend development see the Networkscan-front README.
+
+---
+
+## Deployment
+
+The public demo and a private console run on a VPS behind Caddy, deployed
+from git tags by GitHub Actions (Docker images on GHCR). The runbook —
+one-time VPS setup, secrets, release order, switching to a real domain —
+is in [deploy/README.md](deploy/README.md).
+
+---
+
 ## How ARP Spoofing Detection Works
 
 `arp-watch` builds a live table of IP → MAC bindings from observed ARP
@@ -253,7 +329,10 @@ pytest --cov=nst --cov-report=term-missing
 # Static checks
 mypy src
 flake8 src
+
 ```
+
+Frontend tests run in the Networkscan-front repository.
 
 ---
 
@@ -282,6 +361,13 @@ summary after Ctrl+C to confirm packets were actually seen.
 The `Configuration Error` panel means the YAML file doesn't parse (or
 `NST_CONFIG` points to a missing file). Validate it with
 `python -c "import yaml,sys; yaml.safe_load(open(sys.argv[1]))" FILE`.
+
+**`nst web`: "Web dependencies are not installed"**
+Install the extra: `pip install '.[web]'` (or `pip install -e '.[web]'` in a checkout).
+
+**`nst web`: the page asks for an access token**
+Each start of `nst web` issues a new token. Open the newest link printed in
+the terminal; an old tab switches to the token screen when the server restarts.
 
 **"log file … is not writable"**
 The log file was created by another user (typically an earlier `sudo`

@@ -1,0 +1,52 @@
+# Caddy in front of NST on the VPS.  Host names come from deploy/.env.
+# Caddy obtains and renews HTTPS certificates for both names itself.
+
+{
+	email {$ACME_EMAIL}
+}
+
+(security_headers) {
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+		X-Frame-Options "DENY"
+		Cross-Origin-Opener-Policy "same-origin"
+		Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
+		-Server
+	}
+}
+
+(console_ui) {
+	# The Networkscan-front release currently deployed (a symlink).
+	root * /srv/networkscan-front/current
+	@assets path /assets/*
+	header @assets Cache-Control "public, max-age=31536000, immutable"
+	try_files {path} /index.html
+	file_server
+}
+
+# Public demo: TLS inspection and GeoIP, no capture, no login.
+{$NST_PUBLIC_HOST} {
+	encode zstd gzip
+	import security_headers
+	handle /api/* {
+		reverse_proxy 127.0.0.1:8766
+	}
+	handle {
+		import console_ui
+	}
+}
+
+# Private console: basic auth in front of the token-protected full API.
+{$NST_CONSOLE_HOST} {
+	encode zstd gzip
+	import security_headers
+	import /etc/caddy/console-auth.caddy
+	handle /api/* {
+		reverse_proxy 127.0.0.1:8765
+	}
+	handle {
+		import console_ui
+	}
+}

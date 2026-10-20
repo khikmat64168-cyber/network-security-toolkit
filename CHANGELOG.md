@@ -40,6 +40,20 @@ All notable changes to this project are documented in this file.
 - Public key type and size checks (RSA/DSA ≥ 2048 bits, EC ≥ 224 bits),
   using `cryptography` to parse the DER certificate
 
+### Web Console (`nst web`)
+- FastAPI backend (optional `[web]` extra) bound to loopback only, with a
+  per-launch bearer token, loopback Host-header checks, WebSocket origin
+  checks and a strict Content-Security-Policy
+- Sensors wrap the existing pipelines (traffic analyzer, ARP / DNS / MAC
+  detectors) unchanged and stream their findings as normalized
+  `security.event`-style records; plaintext credentials are redacted
+- Live findings board, traffic statistics and chart, detector tables, TLS
+  scanning, GeoIP and sandboxed HTML report viewing in a React + TypeScript
+  console (separate Networkscan-front repository, bundled into the package
+  by CI via `scripts/fetch_frontend.sh`)
+- Capture permission is probed with a real capture socket; blocked and
+  unavailable features are shown explicitly
+
 ### Reporting & GeoIP (`nst report`, `nst geoip`)
 - Self-contained HTML security report with TLS findings and interfaces
 - Optional country / ISP enrichment via ip-api.com; private addresses
@@ -56,7 +70,15 @@ All notable changes to this project are documented in this file.
   writable, and avoids leaving root-owned directories in the user's HOME
   after `sudo` runs
 - Typed exception hierarchy for predictable error handling
-- Click-based CLI with ten subcommands
+- Click-based CLI with eleven subcommands
+- Captures run through a stoppable sniff loop, so monitors stop immediately
+  even on a quiet interface
+
+### Fixes found while building the web console
+- macOS ARP cache seeding never worked (`arp -a` reverse DNS exceeded the
+  timeout and short MAC octets did not match); now `arp -an` with
+  normalized MACs
+- GeoIP no longer caches failed lookups
 
 ### Production Hardening
 - Top-level exception guard (`nst.cli.main:main`) used by both
@@ -69,7 +91,8 @@ All notable changes to this project are documented in this file.
 - MIT license and this changelog added for public release
 
 ### Testing
-- 426 unit and integration tests (89% line coverage) covering
+- 555 Python unit and integration tests (89% line coverage), covering
   configuration, logging, packet parsing, traffic analysis, every
-  detector, TLS certificate parsing, reporting, and end-to-end CLI flows
+  detector, TLS certificate parsing, reporting, the web API (auth,
+  validation, redaction, sensor lifecycle, WebSocket) and end-to-end CLI flows
 - No root privileges or live network access required to run the test suite

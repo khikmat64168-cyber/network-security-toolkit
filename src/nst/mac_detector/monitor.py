@@ -15,16 +15,16 @@ and handles KeyboardInterrupt to print the session summary.
 """
 from __future__ import annotations
 
-import threading
-from typing import Any
+from typing import Any, Callable, Optional
 
 from nst.core.config import MACDetectorConfig, NetworkConfig
 from nst.core.exceptions import CaptureError, InsufficientPermissionsError
 from nst.core.logger import get_logger
 from nst.mac_detector.alerts import MACAlertManager
 from nst.mac_detector.detector import FloodDetector
-from nst.mac_detector.events import EventLogger
+from nst.mac_detector.events import EventLogger, MACEvent
 from nst.mac_detector.table import MACTable
+from nst.sniffer.loop import SniffLoop
 
 logger = get_logger(__name__)
 
@@ -49,10 +49,14 @@ class MACMonitor:
         self,
         config: MACDetectorConfig,
         network_config: NetworkConfig,
+        listener: Optional[Callable[[MACEvent], None]] = None,
+        console_alerts: bool = True,
     ) -> None:
         self._config = config
+        self._listener = listener
+        self._console_alerts = console_alerts
         self._net_cfg = network_config
-        self._stop_event = threading.Event()
+        self._loop = SniffLoop()
 
         self._table = MACTable()
         self._detector = FloodDetector(
@@ -75,17 +79,14 @@ class MACMonitor:
         raw socket (requires root / CAP_NET_RAW).
         Raises CaptureError for other Scapy / OS failures.
         """
-        from scapy.sendrecv import sniff
-
         iface = self._net_cfg.interface or None
         logger.info("Starting MAC monitor on interface %s", iface or "default")
 
         try:
-            sniff(
+            self._loop.run(
                 iface=iface,
                 prn=self._on_packet,
                 store=False,
-                stop_filter=lambda _: self._stop_event.is_set(),
             )
         except PermissionError as exc:
             raise InsufficientPermissionsError(
@@ -95,8 +96,8 @@ class MACMonitor:
             raise CaptureError(f"MAC capture failed: {exc}") from exc
 
     def stop(self) -> None:
-        """Signal the monitoring loop to exit after the next packet."""
-        self._stop_event.set()
+        """Stop the monitoring loop immediately.  Safe from any thread."""
+        self._loop.stop()
 
     # ── Properties ──────────────────────────────────────────────────────────
 
@@ -140,4 +141,14 @@ class MACMonitor:
 
         for event in events:
             self._event_logger.log(event)
-            self._alert_manager.show_alert(event)
+            if self._console_alerts:
+                self._alert_manager.show_alert(event)
+            self._notify(event)
+
+    def _notify(self, event: MACEvent) -> None:
+        if self._listener is None:
+            return
+        try:
+            self._listener(event)
+        except Exception as exc:
+            logger.debug("Event listener error: %s", exc)

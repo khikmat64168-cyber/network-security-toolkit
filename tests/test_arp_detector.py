@@ -345,3 +345,29 @@ class TestARPAlertManager:
             assert mgr.critical_alerts == 0
         finally:
             _alerts_mod._stderr = orig
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# OS ARP cache parsing
+# ──────────────────────────────────────────────────────────────────────────────
+
+class TestMacOSArpCache:
+    _OUTPUT = (
+        "? (169.254.169.254) at (incomplete) on en0 [ethernet]\n"
+        "? (172.30.1.3) at 4c:11:bf:42:aa:1e on en0 ifscope [ethernet]\n"
+        "? (172.30.1.26) at b2:81:d0:fc:23:b on en0 ifscope permanent [ethernet]\n"
+        "? (239.255.255.250) at 1:0:5e:7f:ff:fa on en0 ifscope permanent [ethernet]\n"
+    )
+
+    def test_uses_numeric_output_and_normalises_octets(self) -> None:
+        from nst.arp_detector.table import _read_macos_arp
+
+        with patch("subprocess.check_output", return_value=self._OUTPUT) as run:
+            cache = _read_macos_arp()
+
+        assert run.call_args.args[0] == ["arp", "-an"]
+        assert cache == {
+            "172.30.1.3": "4c:11:bf:42:aa:1e",
+            "172.30.1.26": "b2:81:d0:fc:23:0b",
+            "239.255.255.250": "01:00:5e:7f:ff:fa",
+        }

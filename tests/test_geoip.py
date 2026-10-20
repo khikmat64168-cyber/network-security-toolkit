@@ -202,6 +202,15 @@ class TestGeoIPClient:
             client.lookup("8.8.8.8")
         assert m.call_count == 1
 
+    def test_failures_are_not_cached(self):
+        client = GeoIPClient()
+        with patch.object(client, "_fetch", side_effect=OSError("offline")) as fetch:
+            first = client.lookup("8.8.8.8")
+            second = client.lookup("8.8.8.8")
+        assert not first.success and not second.success
+        assert fetch.call_count == 2
+        assert client.cache_size == 0
+
     def test_cache_size_increments(self):
         client = GeoIPClient()
         client.lookup("192.168.1.1")

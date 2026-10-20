@@ -15,16 +15,16 @@ PacketCapture (Phase 2) and ARPMonitor (Phase 4).
 """
 from __future__ import annotations
 
-import threading
-from typing import Any
+from typing import Any, Callable, Optional
 
 from nst.core.config import DNSDetectorConfig, NetworkConfig
 from nst.core.exceptions import CaptureError, InsufficientPermissionsError
 from nst.core.logger import get_logger
 from nst.dns_detector.alerts import DNSAlertManager
 from nst.dns_detector.detector import DNSSpoofingDetector
-from nst.dns_detector.events import EventLogger
+from nst.dns_detector.events import DNSEvent, EventLogger
 from nst.dns_detector.table import DNSTable
+from nst.sniffer.loop import SniffLoop
 
 logger = get_logger(__name__)
 
@@ -47,10 +47,14 @@ class DNSMonitor:
         self,
         config: DNSDetectorConfig,
         network_config: NetworkConfig,
+        listener: Optional[Callable[[DNSEvent], None]] = None,
+        console_alerts: bool = True,
     ) -> None:
         self._config = config
+        self._listener = listener
+        self._console_alerts = console_alerts
         self._net_cfg = network_config
-        self._stop_event = threading.Event()
+        self._loop = SniffLoop()
 
         self._table = DNSTable(trusted_domains=config.trusted_domains)
         self._detector = DNSSpoofingDetector(
@@ -70,18 +74,15 @@ class DNSMonitor:
         Raises InsufficientPermissionsError if the process cannot open a
         raw socket.  Raises CaptureError for other OS-level failures.
         """
-        from scapy.sendrecv import sniff
-
         iface = self._net_cfg.interface or None
         logger.info("Starting DNS monitor on interface %s", iface or "default")
 
         try:
-            sniff(
+            self._loop.run(
                 iface=iface,
                 filter="udp port 53",
                 prn=self._on_packet,
                 store=False,
-                stop_filter=lambda _: self._stop_event.is_set(),
             )
         except PermissionError as exc:
             raise InsufficientPermissionsError(
@@ -91,8 +92,8 @@ class DNSMonitor:
             raise CaptureError(f"DNS capture failed: {exc}") from exc
 
     def stop(self) -> None:
-        """Signal the monitoring loop to exit after the next packet."""
-        self._stop_event.set()
+        """Stop the monitoring loop immediately.  Safe from any thread."""
+        self._loop.stop()
 
     # ── Properties ──────────────────────────────────────────────────────
 
@@ -137,5 +138,14 @@ class DNSMonitor:
 
         for event in events:
             self._event_logger.log(event)
-            if event.severity in ("high", "critical"):
+            if self._console_alerts and event.severity in ("high", "critical"):
                 self._alert_manager.show_alert(event)
+            self._notify(event)
+
+    def _notify(self, event: DNSEvent) -> None:
+        if self._listener is None:
+            return
+        try:
+            self._listener(event)
+        except Exception as exc:
+            logger.debug("Event listener error: %s", exc)

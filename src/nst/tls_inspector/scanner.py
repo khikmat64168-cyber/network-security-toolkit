@@ -22,7 +22,7 @@ from __future__ import annotations
 import socket
 import ssl
 from datetime import datetime, timezone
-from typing import Tuple
+from typing import Optional, Tuple
 
 from cryptography import x509
 from cryptography.hazmat.primitives.asymmetric import dsa, ec, ed448, ed25519, rsa
@@ -55,10 +55,15 @@ def scan(
     host: str,
     port: int = 443,
     timeout: int = _DEFAULT_TIMEOUT,
+    connect_ip: Optional[str] = None,
 ) -> TLSScanResult:
     """
     Connect to host:port via TLS, retrieve the peer certificate and
     negotiated cipher, run all checks, and return a TLSScanResult.
+
+    *connect_ip* pins the TCP connection to an address the caller already
+    resolved and vetted, while *host* is still sent as SNI and checked
+    against the certificate.  Without it the host is resolved here.
 
     Never raises — errors are stored in result.error.
     """
@@ -69,7 +74,7 @@ def scan(
     ctx.verify_mode = ssl.CERT_NONE
 
     try:
-        with socket.create_connection((host, port), timeout=timeout) as raw:
+        with socket.create_connection((connect_ip or host, port), timeout=timeout) as raw:
             with ctx.wrap_socket(raw, server_hostname=host) as tls:
                 der = tls.getpeercert(binary_form=True)
                 cipher_info = tls.cipher()

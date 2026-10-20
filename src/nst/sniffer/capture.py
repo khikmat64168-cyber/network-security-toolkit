@@ -5,9 +5,9 @@ Design decisions
 ────────────────
 * start() blocks the calling thread — the CLI runs it on the main thread
   so that KeyboardInterrupt (Ctrl-C) is delivered naturally by the OS.
-* stop_filter lets another thread signal a clean stop after the next
-  packet arrives.  If no packets arrive the loop stays open, which is
-  acceptable for an interactive security tool.
+* Capture runs through SniffLoop, so stop() from another thread (the
+  web dashboard, a timer) takes effect immediately — even on a quiet
+  interface where no further packet would ever arrive.
 * PCAP writing uses PcapWriter with sync=True so every packet is flushed
   to disk immediately — no data is lost if the process is killed.
 * PermissionError from the OS is re-raised as InsufficientPermissionsError
@@ -24,6 +24,7 @@ from scapy.packet import Packet
 from nst.core.config import NetworkConfig, SnifferConfig
 from nst.core.exceptions import CaptureError, InsufficientPermissionsError
 from nst.core.logger import get_logger
+from nst.sniffer.loop import SniffLoop
 
 logger = get_logger(__name__)
 
@@ -49,6 +50,7 @@ class PacketCapture:
         self._stop_event = threading.Event()
         self._packet_count: int = 0
         self._pcap_writer: Optional[Any] = None
+        self._loop: Optional[SniffLoop] = None
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
@@ -74,10 +76,9 @@ class PacketCapture:
             InsufficientPermissionsError: Process lacks raw socket access.
             CaptureError: Capture failed for another OS-level reason.
         """
-        from scapy.sendrecv import sniff
-
         self._stop_event.clear()
         self._packet_count = 0
+        self._loop = SniffLoop()
 
         if self._config.output_file:
             self._open_pcap_writer(self._config.output_file)
@@ -112,7 +113,7 @@ class PacketCapture:
                 logger.debug("on_packet callback raised: %s", exc)
 
         try:
-            sniff(
+            self._loop.run(
                 iface=iface,
                 prn=_handle,
                 filter=bpf_filter,
@@ -134,11 +135,13 @@ class PacketCapture:
 
     def stop(self) -> None:
         """
-        Signal the capture loop to exit after the next packet arrives.
+        Stop the capture loop immediately.
 
         Safe to call from any thread.
         """
         self._stop_event.set()
+        if self._loop is not None:
+            self._loop.stop()
 
     # ── PCAP helpers ───────────────────────────────────────────────────────────
 

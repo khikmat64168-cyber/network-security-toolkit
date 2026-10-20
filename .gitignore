@@ -79,3 +79,11 @@ captured_packets/
 *.p12
 credentials.json
 secrets.yaml
+
+# Web console bundle: built from the Networkscan-front repo by
+# scripts/fetch_frontend.sh (pinned in frontend.version), never edited here.
+src/nst/web/static/
+
+# VPS deployment secrets (created by deploy/vps-setup.sh on the server)
+deploy/.env
+deploy/secrets/

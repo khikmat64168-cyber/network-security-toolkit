@@ -16,23 +16,23 @@ start() blocks the calling thread — the same pattern used by
 PacketCapture in Phase 2.  The caller (CLI command) runs it directly
 and handles KeyboardInterrupt to print the session summary.
 
-Scapy stop_filter
-─────────────────
-Scapy's stop_filter is called after every packet.  When stop() sets
-_stop_event, the next packet (or the timeout) causes sniff() to return.
+Stopping
+────────
+The sniff loop runs through SniffLoop, so stop() from another thread
+ends the capture immediately, even when no further ARP packet arrives.
 """
 from __future__ import annotations
 
-import threading
-from typing import Any
+from typing import Any, Callable, Optional
 
 from nst.arp_detector.alerts import ARPAlertManager
 from nst.arp_detector.detector import SpoofingDetector
-from nst.arp_detector.events import EventLogger
+from nst.arp_detector.events import ARPEvent, EventLogger
 from nst.arp_detector.table import ARPTable
 from nst.core.config import ArpDetectorConfig, NetworkConfig
 from nst.core.exceptions import CaptureError, InsufficientPermissionsError
 from nst.core.logger import get_logger
+from nst.sniffer.loop import SniffLoop
 
 logger = get_logger(__name__)
 
@@ -57,10 +57,14 @@ class ARPMonitor:
         self,
         config: ArpDetectorConfig,
         network_config: NetworkConfig,
+        listener: Optional[Callable[[ARPEvent], None]] = None,
+        console_alerts: bool = True,
     ) -> None:
         self._config = config
+        self._listener = listener
+        self._console_alerts = console_alerts
         self._net_cfg = network_config
-        self._stop_event = threading.Event()
+        self._loop = SniffLoop()
 
         self._table = ARPTable(trusted_ips=config.trusted_ips)
         self._detector = SpoofingDetector(
@@ -81,8 +85,6 @@ class ARPMonitor:
         raw socket (requires root / CAP_NET_RAW).
         Raises CaptureError for other Scapy / OS failures.
         """
-        from scapy.sendrecv import sniff
-
         # Pre-populate the table from the OS ARP cache so we start with
         # a known-good baseline rather than treating every entry as new.
         imported = self._table.load_from_system()
@@ -93,12 +95,11 @@ class ARPMonitor:
         logger.info("Starting ARP monitor on interface %s", iface or "default")
 
         try:
-            sniff(
+            self._loop.run(
                 iface=iface,
                 filter="arp",
                 prn=self._on_packet,
                 store=False,
-                stop_filter=lambda _: self._stop_event.is_set(),
             )
         except PermissionError as exc:
             raise InsufficientPermissionsError(
@@ -108,8 +109,8 @@ class ARPMonitor:
             raise CaptureError(f"ARP capture failed: {exc}") from exc
 
     def stop(self) -> None:
-        """Signal the monitoring loop to exit after the next packet."""
-        self._stop_event.set()
+        """Stop the monitoring loop immediately.  Safe from any thread."""
+        self._loop.stop()
 
     # ── Properties ──────────────────────────────────────────────────────────
 
@@ -149,5 +150,14 @@ class ARPMonitor:
 
         for event in events:
             self._event_logger.log(event)
-            if event.severity in ("high", "critical"):
+            if self._console_alerts and event.severity in ("high", "critical"):
                 self._alert_manager.show_alert(event)
+            self._notify(event)
+
+    def _notify(self, event: ARPEvent) -> None:
+        if self._listener is None:
+            return
+        try:
+            self._listener(event)
+        except Exception as exc:
+            logger.debug("Event listener error: %s", exc)

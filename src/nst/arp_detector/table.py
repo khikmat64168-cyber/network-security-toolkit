@@ -160,12 +160,17 @@ def get_system_arp_cache() -> Dict[str, str]:
 
 
 def _read_macos_arp() -> Dict[str, str]:
-    output = subprocess.check_output(["arp", "-a"], text=True, timeout=5)
+    # -n skips reverse DNS, which can take longer than the timeout on its own.
+    output = subprocess.check_output(["arp", "-an"], text=True, timeout=5)
     result: Dict[str, str] = {}
-    # Example line: ? (192.168.1.1) at aa:bb:cc:dd:ee:ff on en0 ifscope [ethernet]
-    pattern = re.compile(r"\(([0-9.]+)\)\s+at\s+([0-9a-f:]{17})", re.IGNORECASE)
+    # Example line: ? (192.168.1.1) at aa:bb:cc:d:e:f on en0 ifscope [ethernet]
+    # macOS drops leading zeros in each octet, so normalise to aa:bb:cc:0d:0e:0f.
+    pattern = re.compile(
+        r"\(([0-9.]+)\)\s+at\s+([0-9a-f]{1,2}(?::[0-9a-f]{1,2}){5})\b", re.IGNORECASE
+    )
     for match in pattern.finditer(output):
-        result[match.group(1)] = match.group(2).lower()
+        octets = match.group(2).lower().split(":")
+        result[match.group(1)] = ":".join(o.zfill(2) for o in octets)
     return result
 
 

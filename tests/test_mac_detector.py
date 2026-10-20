@@ -368,28 +368,57 @@ class TestMACMonitor:
             monitor._on_packet(self._frame("02:00:00:00:00:01"))
         assert monitor.event_logger.count_by_type(MACEventType.FLOOD_DETECTED) == 0
 
-    def test_start_passes_interface_and_stop_filter(self) -> None:
+    def test_start_passes_interface_to_sniff_loop(self) -> None:
         monitor = self._monitor()
-        with patch("scapy.sendrecv.sniff") as sniff:
+        with patch("nst.sniffer.loop.SniffLoop.run") as run:
             monitor.start()
-        kwargs = sniff.call_args.kwargs
+        kwargs = run.call_args.kwargs
         assert kwargs["iface"] == "lo0"
         assert kwargs["store"] is False
-        assert kwargs["stop_filter"](None) is False
-        monitor.stop()
-        assert kwargs["stop_filter"](None) is True
+
+    def test_stop_stops_sniff_loop(self) -> None:
+        monitor = self._monitor()
+        with patch("nst.sniffer.loop.SniffLoop.stop") as stop:
+            monitor.stop()
+        stop.assert_called_once()
 
     def test_permission_error_is_translated(self) -> None:
         monitor = self._monitor()
-        with patch("scapy.sendrecv.sniff", side_effect=PermissionError("denied")):
+        with patch("nst.sniffer.loop.SniffLoop.run", side_effect=PermissionError("denied")):
             with pytest.raises(InsufficientPermissionsError):
                 monitor.start()
 
     def test_os_error_is_translated(self) -> None:
         monitor = self._monitor()
-        with patch("scapy.sendrecv.sniff", side_effect=OSError("iface down")):
+        with patch("nst.sniffer.loop.SniffLoop.run", side_effect=OSError("iface down")):
             with pytest.raises(CaptureError):
                 monitor.start()
+
+    def test_listener_receives_events_without_console(self) -> None:
+        received: list[MACEvent] = []
+        monitor = MACMonitor(
+            MACDetectorConfig(flood_threshold=3, window_secs=60.0, table_limit=1000),
+            NetworkConfig(),
+            listener=received.append,
+            console_alerts=False,
+        )
+        with patch.object(monitor.alert_manager, "show_alert") as show:
+            for i in range(5):
+                monitor._on_packet(self._frame(f"02:00:00:00:00:{i:02x}"))
+        assert received and received[0].event_type == MACEventType.FLOOD_DETECTED
+        show.assert_not_called()
+
+    def test_listener_errors_are_contained(self) -> None:
+        def boom(_event: MACEvent) -> None:
+            raise RuntimeError("listener bug")
+
+        monitor = MACMonitor(
+            MACDetectorConfig(flood_threshold=3, window_secs=60.0, table_limit=1000),
+            NetworkConfig(), listener=boom, console_alerts=False,
+        )
+        for i in range(5):
+            monitor._on_packet(self._frame(f"02:00:00:00:00:{i:02x}"))
+        assert monitor.event_logger.count_by_type(MACEventType.FLOOD_DETECTED) >= 1
 
 
 class TestMACWatchCLI:

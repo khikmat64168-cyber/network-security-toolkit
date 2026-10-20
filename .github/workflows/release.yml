@@ -1,0 +1,109 @@
+name: Release
+
+# Push a tag like v1.2.3 (matching nst.__version__) to test, publish the
+# image to GHCR, attach the wheel to a GitHub Release, and deploy to the VPS.
+#
+# Repository secrets (Settings → Secrets and variables → Actions):
+#   VPS_HOST         VPS address (IP or name)
+#   VPS_SSH_KEY      private key of the "deploy" user (vps-setup.sh --ci-key gets the public half)
+#   VPS_KNOWN_HOSTS  output of: ssh-keyscan -t ed25519 <VPS address>
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+env:
+  IMAGE: ghcr.io/khikmat64168-cyber/network-security-toolkit
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Tag matches nst.__version__
+        run: |
+          version="$(sed -n 's/^__version__ = "\(.*\)"/\1/p' src/nst/__init__.py)"
+          [ "v$version" = "$GITHUB_REF_NAME" ] || { echo "tag $GITHUB_REF_NAME != v$version"; exit 1; }
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq libpcap0.8
+      - run: pip install -e '.[web]' -r requirements-dev.txt
+      - run: flake8 src
+      - run: mypy src
+      - run: pytest -q -p no:cacheprovider
+
+  image:
+    needs: verify
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Log in to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+      - name: Build and push
+        run: |
+          docker build --build-arg VERSION="$GITHUB_REF_NAME" \
+            -t "$IMAGE:$GITHUB_REF_NAME" -t "$IMAGE:latest" .
+          docker push "$IMAGE:$GITHUB_REF_NAME"
+          docker push "$IMAGE:latest"
+
+  wheel:
+    needs: verify
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Bundle the pinned web console
+        run: ./scripts/fetch_frontend.sh --release
+      - name: Build wheel and sdist
+        run: pip install build==1.2.2 && python -m build
+      - name: GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --title "$GITHUB_REF_NAME" --generate-notes --verify-tag
+
+  deploy:
+    needs: image
+    runs-on: ubuntu-24.04
+    environment: production
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: SSH setup
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/id_ed25519
+          printf '%s\n' "${{ secrets.VPS_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/id_ed25519 ~/.ssh/known_hosts
+      - name: Copy deployment files
+        run: |
+          scp -q deploy/docker-compose.yml deploy/Caddyfile deploy/deploy.sh deploy/deploy-front.sh \
+            "deploy@${{ secrets.VPS_HOST }}:/opt/nst/deploy/"
+      - name: Deploy
+        run: |
+          # The job's short-lived token pulls the image; it is removed right after.
+          # The tag is expanded here on purpose (SC2029).
+          # shellcheck disable=SC2029
+          ssh "deploy@${{ secrets.VPS_HOST }}" \
+            "docker login ghcr.io -u '${{ github.actor }}' --password-stdin >/dev/null \
+             && chmod +x /opt/nst/deploy/*.sh \
+             && /opt/nst/deploy/deploy.sh '$GITHUB_REF_NAME'; rc=\$?; docker logout ghcr.io >/dev/null; exit \$rc" \
+            <<< "${{ secrets.GITHUB_TOKEN }}"

@@ -13,6 +13,7 @@ Subcommands
   report      — Generate a self-contained HTML security report.
   geoip       — Look up IP / hostname geolocation.
   dashboard   — Live traffic dashboard.
+  web         — Local browser dashboard (FastAPI, loopback only).
   interfaces  — List available network interfaces.
   status      — Display current configuration and toolkit status.
 """
@@ -104,6 +105,7 @@ def cli(ctx: click.Context, config_path: Optional[Path], debug: bool) -> None:
       report      Generate an HTML security report
       geoip       Look up geolocation for IP addresses or hostnames
       dashboard   Live traffic dashboard with real-time statistics
+      web         Local browser dashboard (http://127.0.0.1 only)
       interfaces  List available network interfaces
       status      Show current configuration
 
@@ -750,6 +752,96 @@ def geoip(ctx: click.Context, targets: tuple[str, ...]) -> None:
     client = GeoIPClient()
     results = [client.lookup(t) for t in targets]
     print_geo_table(results)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# `nst web`
+# ──────────────────────────────────────────────────────────────────────────────
+
+@cli.command("web")
+@click.option("--host", default="127.0.0.1", show_default=True,
+              help="Loopback address to listen on (127.0.0.1, ::1 or localhost).")
+@click.option("--port", default=8765, show_default=True, type=click.IntRange(1, 65535),
+              envvar="NST_WEB_PORT", help="TCP port to listen on.")
+@click.option("--no-browser", is_flag=True, default=False,
+              help="Do not open the dashboard in a browser.")
+@click.option("--dev-origin", "dev_origins", multiple=True, hidden=True,
+              help="Extra allowed browser origin (frontend dev server).")
+@click.option("--mode", type=click.Choice(["local", "console", "public"]), default="local",
+              show_default=True, envvar="NST_WEB_MODE",
+              help="local: this machine; console / public: behind the VPS reverse proxy.")
+@click.option("--allowed-host", "allowed_hosts", multiple=True, envvar="NST_ALLOWED_HOSTS",
+              metavar="HOST",
+              help="Host name served by the reverse proxy (console / public modes); repeatable. "
+                   "NST_ALLOWED_HOSTS takes a space-separated list.")
+@click.pass_context
+def web(
+    ctx: click.Context,
+    host: str,
+    port: int,
+    no_browser: bool,
+    dev_origins: tuple[str, ...],
+    mode: str,
+    allowed_hosts: tuple[str, ...],
+) -> None:
+    """Serve the browser dashboard on loopback.
+
+    \b
+    Packet capture needs the same privileges as the CLI capture commands,
+    so start it with sudo to use the live sensors:
+      sudo nst web
+    TLS scans, GeoIP and reports work without root.
+
+    \b
+    On the VPS the same command runs behind Caddy:
+      nst web --mode public  --allowed-host example.com
+      nst web --mode console --allowed-host console.example.com
+    Console mode reads its access token from NST_WEB_TOKEN.
+    """
+    try:
+        from nst.web.server import serve
+    except ImportError as exc:
+        err_console.print(
+            Panel(
+                f"[bold red]Web dependencies are not installed[/bold red] ({exc.name}).\n\n"
+                "Install them with:  [bold]pip install 'network-security-toolkit[web]'[/bold]\n"
+                "or from a checkout: [bold]pip install -e '.[web]'[/bold]",
+                title="[red]Missing Dependency[/red]",
+                border_style="red",
+            )
+        )
+        raise SystemExit(1)
+
+    cfg: AppConfig = ctx.obj["config"]
+
+    def announce(url: str) -> None:
+        if mode != "local":
+            console.print(
+                f"[bold cyan]NST Web ({mode} mode)[/bold cyan] listening on "
+                f"{host}:{port} behind the reverse proxy for: {url}",
+                soft_wrap=True, highlight=False,
+            )
+            return
+        console.print(
+            Panel(
+                "Listening on loopback only.  The link below contains a one-time\n"
+                "access token for this session — don't share it.\n\n"
+                "Press [bold]Ctrl+C[/bold] to stop.",
+                title="[bold cyan]NST Web — Started[/bold cyan]",
+                border_style="cyan",
+            )
+        )
+        # Printed outside the panel and unwrapped so it stays clickable / copyable.
+        console.print(url, style="bold cyan", soft_wrap=True, highlight=False)
+
+    try:
+        serve(cfg, host=host, port=port, open_browser=not no_browser,
+              dev_origins=list(dev_origins), announce=announce, mode=mode,
+              allowed_hosts=list(allowed_hosts),
+              console_token=os.environ.get("NST_WEB_TOKEN"))
+    except ConfigurationError as exc:
+        err_console.print(f"[red]Cannot start web dashboard:[/red] {exc}")
+        raise SystemExit(1)
 
 
 # ──────────────────────────────────────────────────────────────────────────────

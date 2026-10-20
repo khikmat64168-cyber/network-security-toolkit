@@ -6,8 +6,10 @@ Design decisions
 * Uses only stdlib (urllib, json, ipaddress) — no extra dependency.
 * Private / loopback / link-local IPs are detected locally and never
   sent to the API; they return a GeoResult with is_private=True.
-* All results are cached in memory; a second lookup for the same
-  address is free.
+* Successful and private-range results are cached in memory; a second
+  lookup for the same address is free.  Failures (timeouts, API errors)
+  are not cached, so a long-running caller such as the web dashboard
+  can retry once connectivity returns.
 * Errors (network timeout, bad JSON, API failure) are captured in
   GeoResult.success/error so callers never need to catch exceptions.
 * Timeout is deliberately short (3 s) to avoid stalling packet capture
@@ -69,7 +71,8 @@ class GeoIPClient:
             except Exception as exc:
                 result = GeoResult(ip=target, success=False, error=str(exc))
 
-        self._cache[target] = result
+        if result.success:
+            self._cache[target] = result
         return result
 
     def lookup_batch(self, targets: List[str]) -> Dict[str, GeoResult]:
