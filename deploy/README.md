@@ -1,5 +1,8 @@
 # Deploying NST to the VPS (Coolify)
 
+How this deployment was built, step by step, with the problems hit along
+the way (in Uzbek): [DEPLOY_JARAYONI.md](DEPLOY_JARAYONI.md).
+
 The VPS already runs **Coolify**, whose Traefik proxy owns ports 80/443 and
 serves the other apps. NST fits into that instead of bringing its own proxy:
 
