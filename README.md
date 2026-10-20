@@ -181,6 +181,19 @@ so they can be used as checks in scripts.
 
 ## Web Console
 
+The quickest way to get it is the wheel attached to each
+[GitHub release](https://github.com/khikmat64168-cyber/network-security-toolkit/releases):
+it bundles the built console (the package is not on PyPI).
+
+```bash
+python3 -m venv nst-env
+nst-env/bin/pip install "network-security-toolkit[web] @ https://github.com/khikmat64168-cyber/network-security-toolkit/releases/download/v1.0.3/network_security_toolkit-1.0.3-py3-none-any.whl"
+sudo nst-env/bin/nst web
+```
+
+From a checkout, put the console in place first (see
+[Getting the web console](#getting-the-web-console)), then:
+
 ```bash
 # Install with the web extra (FastAPI + uvicorn)
 pip install '.[web]'

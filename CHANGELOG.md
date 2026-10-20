@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented in this file.
 
+## [1.0.3]
+
+### Fixed
+- Install instructions (README, the public demo's About page and its
+  "not available" message) pointed at PyPI, where the package is not
+  published; they now use the release wheel, which bundles the console
+
 ## [1.0.2]
 
 ### Fixed

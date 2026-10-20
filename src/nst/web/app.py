@@ -95,7 +95,8 @@ PUBLIC_GEO_PER_MINUTE = 20         # targets per client IP
 PUBLIC_GEO_GLOBAL_PER_MINUTE = 40  # targets across all clients
 PUBLIC_UNAVAILABLE = (
     "Not available in the public demo. Live capture, detector tables and reports "
-    "run in a local install (pip install 'network-security-toolkit[web]', then nst web)."
+    "run in a local install: pip install the wheel from the project's GitHub "
+    "release, then run nst web."
 )
 
 
