@@ -36,6 +36,7 @@ Design decisions
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import os
 import platform
 import sys
@@ -43,7 +44,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, AsyncIterator, Dict, Iterable, List, Optional, Set
+from typing import Any, AsyncIterator, Dict, Iterable, List, Optional, Set, Union
 
 from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
@@ -67,7 +68,6 @@ from nst.web.security import (
     HostAllowlistMiddleware,
     allowed_origins,
     app_csp,
-    is_loopback_host,
     bearer_token,
     tokens_match,
     ws_token,
@@ -83,6 +83,8 @@ _RECENT_IN_TICK = 25
 _TIMELINE_IN_TICK = 120
 
 MODES = ("local", "console", "public")
+
+IPNetwork = Union[ipaddress.IPv4Network, ipaddress.IPv6Network]
 
 # Public demo limits.  ip-api.com allows 45 requests/minute per server
 # IP, so the global GeoIP budget stays below that.
@@ -243,16 +245,39 @@ def _traffic_tick(details: Dict[str, Any]) -> Dict[str, Any]:
 # Application factory
 # ──────────────────────────────────────────────────────────────────────────────
 
-def client_ip(request: Request) -> str:
+LOOPBACK_NETWORKS = ("127.0.0.0/8", "::1/128")
+
+
+def parse_networks(values: Iterable[str]) -> List[IPNetwork]:
+    """Parse CIDRs (and bare addresses); raises ValueError on a bad entry."""
+    return [ipaddress.ip_network(v.strip(), strict=False) for v in values if v.strip()]
+
+
+def _in_networks(address: str, networks: List[IPNetwork]) -> bool:
+    try:
+        ip = ipaddress.ip_address(address.strip().strip("[]"))
+    except ValueError:
+        return False
+    return any(ip in net for net in networks)
+
+
+def client_ip(request: Request, trusted: Optional[List[IPNetwork]] = None) -> str:
     """
-    The requesting client's address.  Behind the reverse proxy the peer is
-    loopback and the proxy reports the real client in X-Forwarded-For
-    (Caddy sets that header itself and ignores values sent by clients).
+    The requesting client's address.
+
+    When the peer is a trusted reverse proxy (loopback for Caddy, the
+    Docker network for Coolify's Traefik), the client is taken from
+    X-Forwarded-For: the right-most entry that is not itself a trusted
+    proxy.  Proxies append the address they saw, so entries further left
+    may be forged by the client and are ignored.
     """
+    networks = trusted if trusted is not None else parse_networks(LOOPBACK_NETWORKS)
     peer = request.client.host if request.client else ""
     forwarded = request.headers.get("x-forwarded-for")
-    if forwarded and is_loopback_host(peer):
-        return forwarded.split(",")[0].strip()
+    if forwarded and _in_networks(peer, networks):
+        for hop in reversed([h.strip() for h in forwarded.split(",") if h.strip()]):
+            if not _in_networks(hop, networks):
+                return hop
     return peer or "unknown"
 
 
@@ -265,6 +290,7 @@ def create_app(
     static_dir: Path = STATIC_DIR,
     mode: str = "local",
     allowed_hosts: Iterable[str] = (),
+    trusted_proxies: Iterable[str] = LOOPBACK_NETWORKS,
 ) -> FastAPI:
     if mode not in MODES:
         raise ValueError(f"Unknown mode {mode!r}")
@@ -273,6 +299,7 @@ def create_app(
     elif not token:
         raise ValueError(f"Mode {mode!r} requires an access token")
     public = mode == "public"
+    trusted = parse_networks(trusted_proxies)
 
     # Event sequence numbers restart with the server; clients compare this
     # id to know when their cached history belongs to a previous run.
@@ -586,7 +613,7 @@ def create_app(
         targets = validation.tls_targets(body.hosts, body.port)
         for _host, scan_port in targets:
             netguard.check_public_port(scan_port)
-        rate_limit(tls_limiter, client_ip(request), len(targets), "TLS scans")
+        rate_limit(tls_limiter, client_ip(request, trusted), len(targets), "TLS scans")
         # Resolve and vet every host before connecting to any of them.
         pinned = [(h, p, netguard.resolve_public(h)) for h, p in targets]
         futures = [pool.submit(scanner.scan, h, port=p, timeout=timeout, connect_ip=ip)
@@ -605,7 +632,7 @@ def create_app(
     def geoip(request: Request, body: GeoRequest) -> Dict[str, Any]:
         targets = validation.geo_targets(body.targets)
         if public:
-            rate_limit(geo_limiter, client_ip(request), len(targets), "GeoIP lookups")
+            rate_limit(geo_limiter, client_ip(request, trusted), len(targets), "GeoIP lookups")
             rate_limit(geo_global, "global", len(targets), "GeoIP lookups (server-wide)")
         return {"results": [_geo_dict(geo_client.lookup(t)) for t in targets]}
 

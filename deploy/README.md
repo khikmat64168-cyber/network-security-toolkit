@@ -1,117 +1,120 @@
-# Deploying NST to the VPS
+# Deploying NST to the VPS (Coolify)
+
+The VPS already runs **Coolify**, whose Traefik proxy owns ports 80/443 and
+serves the other apps. NST fits into that instead of bringing its own proxy:
 
 ```
-                     ┌──────────── Caddy (HTTPS, ports 80/443) ───────────┐
-PUBLIC_HOST       →  │  /       → Networkscan-front (static files)       │
-                     │  /api/*  → nst-public   127.0.0.1:8766            │  TLS + GeoIP only, no capture,
-                     │                                                   │  rate-limited, SSRF-guarded
-CONSOLE_HOST      →  │  basic auth, then token                           │
-                     │  /       → Networkscan-front                      │
-                     │  /api/*  → nst-console  127.0.0.1:8765            │  full console, captures the
-                     └───────────────────────────────────────────────────┘  VPS's own traffic
+Internet ──► Traefik (Coolify, HTTPS) ──► nst-public container :8766
+                                           public demo: TLS + GeoIP, web console UI,
+                                           no capture, no token, rate-limited, SSRF-guarded
+
+You ──SSH tunnel──► 127.0.0.1:8765 on the VPS ──► nst-console container (host network)
+                                           full console: sensors capture the VPS's traffic,
+                                           never reachable from the internet
 ```
 
-Both backends listen on loopback only; Caddy is the only thing reachable
-from the internet. Releases are driven by git tags in the two repositories:
+Nothing here touches Coolify's own containers, Docker's installation or the
+firewall.
 
-| Repo | Tag `vX.Y.Z` does |
+| Release | What happens |
 |---|---|
-| network-security-toolkit | tests → image to GHCR → wheel on GitHub Releases → `deploy.sh` on the VPS |
-| Networkscan-front | tests → `dist` archive on GitHub Releases → `deploy-front.sh` on the VPS |
+| Networkscan-front tag `vX.Y.Z` | `dist` archive published on GitHub Releases |
+| network-security-toolkit tag `vX.Y.Z` | tests → image (with the console from `frontend.version`) on GHCR → wheel on GitHub Releases → Coolify redeploys the public demo → the private console is updated over SSH |
 
-## 1. One-time: SSH key for GitHub Actions
+To ship a new console: release Networkscan-front, bump `frontend.version`
+here, release the backend.
 
-On your computer:
+## 1. One-time: the private console's host user
+
+The SSH key GitHub Actions uses (public half in `~/.ssh/nst_deploy.pub`):
 
 ```bash
 ssh-keygen -t ed25519 -N "" -C "github-actions-deploy" -f ~/.ssh/nst_deploy
 ```
 
-`~/.ssh/nst_deploy.pub` goes to the VPS (next step); `~/.ssh/nst_deploy`
-(private) goes to GitHub secrets (step 3).
-
-## 2. One-time: prepare the VPS
-
-Copy the setup script and run it as root (Ubuntu 22.04 / 24.04):
+Create the `deploy` user and `/opt/nst-console` (no packages, no firewall
+changes):
 
 ```bash
-scp deploy/vps-setup.sh root@VPS_IP:/root/
+scp deploy/console-setup.sh root@VPS:/root/
 ```
 
 ```bash
-ssh -t root@VPS_IP "bash /root/vps-setup.sh --email you@example.com --ci-key '$(cat ~/.ssh/nst_deploy.pub)'"
+ssh root@VPS "bash /root/console-setup.sh --ci-key '$(cat ~/.ssh/nst_deploy.pub)'"
 ```
 
-It installs Docker, creates the `deploy` user, opens only SSH/80/443,
-writes `/opt/nst/deploy/.env` (host names default to `<ip>.sslip.io` and
-`console.<ip>.sslip.io`, plus a random console token) and asks for the
-console's basic-auth password (that is why `ssh -t` is needed).
+## 2. First releases
 
-## 3. One-time: GitHub secrets (both repositories)
+1. Networkscan-front: `git tag v1.0.0 && git push origin v1.0.0`
+2. This repo: `git tag v1.0.0 && git push origin v1.0.0`
 
-Settings → Secrets and variables → Actions → *New repository secret*:
+The *image* job publishes `ghcr.io/khikmat64168-cyber/network-security-toolkit`.
+The two deploy jobs fail on this first run until steps 3–4 are done; that
+is expected.
+
+## 3. One-time: make the image public
+
+GitHub → your profile → **Packages** → `network-security-toolkit` →
+**Package settings** → *Change visibility* → **Public**. (The source is
+public anyway; this lets Coolify and the VPS pull without credentials.)
+
+## 4. One-time: the public demo in Coolify
+
+1. Coolify → a project → **+ New** → **Docker Image** →
+   `ghcr.io/khikmat64168-cyber/network-security-toolkit:latest`.
+2. **Domains**: `https://nst.<ip-with-dashes>.sslip.io` for now, or a real
+   name (e.g. `https://nst.example.com` after an A record points to the VPS).
+3. **Ports exposes**: `8766`.
+4. **Environment variables**: `NST_ALLOWED_HOSTS` = the domain's host name
+   (without `https://`).
+5. **Health check**: path `/api/mode`, port `8766`.
+6. Deploy, then note the resource's **Deploy Webhook** URL and create an API
+   token under **Keys & Tokens** (deploy permission).
+
+## 5. One-time: GitHub settings (this repo)
+
+Settings → Secrets and variables → Actions:
 
 | Secret | Value |
 |---|---|
-| `VPS_HOST` | the VPS IP |
+| `COOLIFY_DEPLOY_WEBHOOK` | the Deploy Webhook URL from step 4 |
+| `COOLIFY_API_TOKEN` | the Coolify API token |
+| `VPS_HOST` | VPS IP |
 | `VPS_SSH_KEY` | contents of `~/.ssh/nst_deploy` |
-| `VPS_KNOWN_HOSTS` | output of `ssh-keyscan -t ed25519 VPS_IP` |
+| `VPS_KNOWN_HOSTS` | output of `ssh-keyscan -t ed25519 VPS` |
 
-Settings → Environments → create **production** (optionally require your
-approval before each deploy).
+Variables tab: `PUBLIC_URL` = the demo's URL (e.g. `https://nst.example.com`).
+Settings → Environments → create **production**.
 
-## 4. First releases (order matters once)
+Then re-run the failed deploy jobs of the v1.0.0 release (Actions → the run
+→ *Re-run failed jobs*). Later releases deploy on their own.
 
-1. **Backend first** — it installs `deploy-front.sh` on the VPS:
+## Using the private console
 
-   ```bash
-   git tag v1.0.0 && git push origin v1.0.0
-   ```
+```bash
+ssh -L 8765:127.0.0.1:8765 deploy@VPS
+```
 
-2. **Frontend** (in Networkscan-front):
+Open `http://127.0.0.1:8765/` and paste the token from:
 
-   ```bash
-   git tag v1.0.0 && git push origin v1.0.0
-   ```
+```bash
+ssh root@VPS "grep NST_WEB_TOKEN /opt/nst-console/.env"
+```
 
-   The backend's *wheel* job bundles the frontend release pinned in
-   `frontend.version`; if it ran before the frontend release existed,
-   re-run that job from the Actions tab.
-
-Then open `https://<ip>.sslip.io` (public demo) and
-`https://console.<ip>.sslip.io` (basic auth, then the token from
-`sudo grep NST_WEB_TOKEN /opt/nst/deploy/.env` on the VPS).
-
-## Switching to a real domain later
-
-1. DNS: A records `example.com` and `console.example.com` → VPS IP.
-2. On the VPS, edit `/opt/nst/deploy/.env`: `NST_PUBLIC_HOST=example.com`,
-   `NST_CONSOLE_HOST=console.example.com`.
-3. Apply:
-
-   ```bash
-   ssh deploy@VPS_IP "cd /opt/nst/deploy && docker compose up -d"
-   ```
-
-Caddy obtains the new certificates by itself. Nothing in the code changes.
+The console sees only the VPS's own traffic: traffic, DNS, TLS and GeoIP
+are useful there; ARP and MAC detection are of little use in a data-centre
+network.
 
 ## Operating
 
 ```bash
-# status and logs
-ssh deploy@VPS_IP "cd /opt/nst/deploy && docker compose ps && docker compose logs --tail 50"
+# console status / logs / roll back
+ssh deploy@VPS "cd /opt/nst-console && docker compose ps && docker compose logs --tail 50"
 ```
 
 ```bash
-# roll back to an earlier release
-ssh deploy@VPS_IP "/opt/nst/deploy/deploy.sh v1.0.0"
+ssh deploy@VPS "/opt/nst-console/deploy-console.sh v1.0.0"
 ```
 
-`deploy.sh` waits for both backends to answer and rolls back by itself if
-a new release does not come up. Frontend releases are kept under
-`/srv/networkscan-front/releases/` (newest five); re-running a frontend
-release's deploy job switches back to it.
-
-Capture in the console sees only the VPS's own network interface — ARP and
-MAC detection are of little use in a data-centre network; traffic, DNS,
-TLS and GeoIP are.
+The public demo's logs, restarts and rollbacks are in Coolify's UI for the
+resource.

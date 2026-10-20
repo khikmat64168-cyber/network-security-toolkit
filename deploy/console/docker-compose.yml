@@ -1,0 +1,49 @@
+# NST private console on the VPS — reachable only through an SSH tunnel.
+#
+# Host network so the sensors see the VPS's real interfaces; it listens on
+# 127.0.0.1:8765 only, so nothing is exposed to the internet and it does
+# not touch Coolify, Traefik or the apps they run.
+#
+#   ssh -L 8765:127.0.0.1:8765 deploy@VPS
+#   open http://127.0.0.1:8765/  (token: NST_WEB_TOKEN in /opt/nst-console/.env)
+#
+# Managed by deploy-console.sh (run by the backend's release workflow).
+
+name: nst-console
+
+services:
+  nst-console:
+    image: ghcr.io/khikmat64168-cyber/network-security-toolkit:${NST_VERSION:?set NST_VERSION in .env}
+    network_mode: host
+    restart: unless-stopped
+    read_only: true
+    # Root inside the container, but only the two capabilities packet
+    # capture needs; everything else is dropped.
+    user: "0:0"
+    cap_drop: [ALL]
+    cap_add: [NET_RAW, NET_ADMIN]
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      NST_WEB_MODE: console
+      NST_WEB_HOST: 127.0.0.1
+      NST_WEB_PORT: "8765"
+      # The SSH tunnel arrives as a loopback connection to this host name.
+      NST_ALLOWED_HOSTS: localhost
+      NST_TRUSTED_PROXIES: 127.0.0.0/8
+      NST_WEB_TOKEN: ${NST_WEB_TOKEN:?set NST_WEB_TOKEN in .env}
+      # Root without CAP_DAC_OVERRIDE cannot write the image's nst-owned
+      # /var/lib/nst, so the console keeps its state in its own volume.
+      XDG_STATE_HOME: /var/lib/nst-console
+    volumes:
+      - nst-console-state:/var/lib/nst-console
+    tmpfs:
+      - /tmp:size=64m
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  nst-console-state:

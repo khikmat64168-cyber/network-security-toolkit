@@ -331,3 +331,61 @@ class TestSettings:
         assert kwargs["mode"] == "console"
         assert kwargs["allowed_hosts"] == [CONSOLE_HOST, "other.example.com"]
         assert kwargs["console_token"] == CONSOLE_TOKEN
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Reverse-proxy client address (Caddy on loopback, Traefik on a Docker network)
+# ──────────────────────────────────────────────────────────────────────────────
+
+class TestClientIp:
+    @staticmethod
+    def _request(peer: str, xff: str | None) -> Any:
+        from starlette.requests import Request
+
+        headers = [(b"x-forwarded-for", xff.encode())] if xff else []
+        return Request({"type": "http", "headers": headers, "client": (peer, 1234)})
+
+    def test_loopback_proxy_is_trusted_by_default(self) -> None:
+        from nst.web.app import client_ip
+
+        assert client_ip(self._request("127.0.0.1", "203.0.113.9")) == "203.0.113.9"
+
+    def test_forged_left_entries_are_ignored(self) -> None:
+        from nst.web.app import client_ip, parse_networks
+
+        trusted = parse_networks(["10.0.1.0/24"])
+        request = self._request("10.0.1.13", "1.2.3.4, 203.0.113.9")   # client forged 1.2.3.4
+        assert client_ip(request, trusted) == "203.0.113.9"
+
+    def test_untrusted_peer_header_is_ignored(self) -> None:
+        from nst.web.app import client_ip
+
+        assert client_ip(self._request("198.51.100.5", "1.2.3.4")) == "198.51.100.5"
+
+    def test_docker_network_proxy(self) -> None:
+        from nst.web.app import client_ip, parse_networks
+
+        trusted = parse_networks(["10.0.1.0/24"])
+        assert client_ip(self._request("10.0.1.13", "198.51.100.77"), trusted) == "198.51.100.77"
+        # Loopback is not trusted once a specific network is configured.
+        assert client_ip(self._request("127.0.0.1", "198.51.100.77"), trusted) == "127.0.0.1"
+
+    def test_bad_network_rejected(self) -> None:
+        from nst.web.app import parse_networks
+
+        with pytest.raises(ValueError):
+            parse_networks(["not-a-cidr"])
+
+
+class TestBindRules:
+    def test_public_mode_may_listen_on_all_addresses(self) -> None:
+        from nst.web.server import check_bind
+
+        check_bind("0.0.0.0", 0, "public")   # port 0: any free port
+
+    @pytest.mark.parametrize("mode", ["local", "console"])
+    def test_capture_modes_stay_on_loopback(self, mode: str) -> None:
+        from nst.web.server import check_bind
+
+        with pytest.raises(ConfigurationError, match="loopback"):
+            check_bind("0.0.0.0", 0, mode)

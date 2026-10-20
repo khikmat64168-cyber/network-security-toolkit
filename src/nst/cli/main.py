@@ -759,8 +759,9 @@ def geoip(ctx: click.Context, targets: tuple[str, ...]) -> None:
 # ──────────────────────────────────────────────────────────────────────────────
 
 @cli.command("web")
-@click.option("--host", default="127.0.0.1", show_default=True,
-              help="Loopback address to listen on (127.0.0.1, ::1 or localhost).")
+@click.option("--host", default="127.0.0.1", show_default=True, envvar="NST_WEB_HOST",
+              help="Address to listen on. Loopback only, except --mode public "
+                   "(e.g. 0.0.0.0 inside a container behind Coolify/Traefik).")
 @click.option("--port", default=8765, show_default=True, type=click.IntRange(1, 65535),
               envvar="NST_WEB_PORT", help="TCP port to listen on.")
 @click.option("--no-browser", is_flag=True, default=False,
@@ -774,6 +775,10 @@ def geoip(ctx: click.Context, targets: tuple[str, ...]) -> None:
               metavar="HOST",
               help="Host name served by the reverse proxy (console / public modes); repeatable. "
                    "NST_ALLOWED_HOSTS takes a space-separated list.")
+@click.option("--trusted-proxy", "trusted_proxies", multiple=True, envvar="NST_TRUSTED_PROXIES",
+              metavar="CIDR",
+              help="Network of the reverse proxy whose X-Forwarded-For is trusted "
+                   "(default: loopback); repeatable / space-separated in the env var.")
 @click.pass_context
 def web(
     ctx: click.Context,
@@ -783,6 +788,7 @@ def web(
     dev_origins: tuple[str, ...],
     mode: str,
     allowed_hosts: tuple[str, ...],
+    trusted_proxies: tuple[str, ...],
 ) -> None:
     """Serve the browser dashboard on loopback.
 
@@ -793,9 +799,11 @@ def web(
     TLS scans, GeoIP and reports work without root.
 
     \b
-    On the VPS the same command runs behind Caddy:
-      nst web --mode public  --allowed-host example.com
-      nst web --mode console --allowed-host console.example.com
+    On the VPS (see deploy/README.md):
+      nst web --mode public --host 0.0.0.0 --allowed-host nst.example.com
+        (the public demo, behind Coolify's Traefik)
+      nst web --mode console --allowed-host localhost
+        (the private console on loopback, opened through an SSH tunnel)
     Console mode reads its access token from NST_WEB_TOKEN.
     """
     try:
@@ -838,7 +846,8 @@ def web(
         serve(cfg, host=host, port=port, open_browser=not no_browser,
               dev_origins=list(dev_origins), announce=announce, mode=mode,
               allowed_hosts=list(allowed_hosts),
-              console_token=os.environ.get("NST_WEB_TOKEN"))
+              console_token=os.environ.get("NST_WEB_TOKEN"),
+              trusted_proxies=list(trusted_proxies) or None)
     except ConfigurationError as exc:
         err_console.print(f"[red]Cannot start web dashboard:[/red] {exc}")
         raise SystemExit(1)

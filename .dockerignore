@@ -14,7 +14,6 @@ logs
 tests
 deploy
 scripts
-src/nst/web/static
 *.egg-info
 .env
 .env.*

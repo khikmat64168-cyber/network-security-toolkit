@@ -1,12 +1,13 @@
 """
 Run the NST web dashboard with uvicorn.
 
-The bind address is restricted to loopback in every mode: the dashboard
-can start packet captures, so it must never be reachable from the network
-directly.  There is deliberately no flag to override this.  On the VPS a
-reverse proxy (Caddy) on the same host terminates HTTPS and forwards to
-the loopback port; the proxy's public host names are passed in as
-allowed hosts.
+local and console modes listen on loopback only: they can start packet
+captures, so they must never be reachable from the network directly, and
+there is deliberately no flag to override that.  The public demo (no
+capture, no stored data, no token) may also listen on a container address
+so a reverse proxy on a Docker network — Coolify's Traefik — can reach it.
+The proxy's public host names are passed in as allowed hosts and its
+network as trusted proxies.
 """
 from __future__ import annotations
 
@@ -29,12 +30,21 @@ def dashboard_url(host: str, port: int, token: str) -> str:
     return f"http://{shown}:{port}/#token={token}"
 
 
-def check_bind(host: str, port: int) -> None:
-    """Raise ConfigurationError if *host* is not loopback or *port* is taken."""
-    if not is_loopback_host(host):
+def check_bind(host: str, port: int, mode: str = "local") -> None:
+    """
+    Raise ConfigurationError if *host* is not allowed for *mode* or *port*
+    is taken.
+
+    Only the public demo may listen beyond loopback: it captures nothing,
+    stores nothing and needs no token, and in a container (Coolify) the
+    reverse proxy reaches it over the Docker network.  local and console
+    control packet capture and stay on loopback, always.
+    """
+    if not is_loopback_host(host) and mode != "public":
         raise ConfigurationError(
             f"Refusing to bind to {host!r}: the dashboard controls packet capture "
-            "and only listens on loopback (127.0.0.1, ::1 or localhost)."
+            "and only listens on loopback (127.0.0.1, ::1 or localhost). Only "
+            "--mode public may listen on other addresses."
         )
     family = socket.AF_INET6 if ":" in host else socket.AF_INET
     with socket.socket(family, socket.SOCK_STREAM) as probe:
@@ -90,18 +100,26 @@ def serve(
     mode: str = "local",
     allowed_hosts: Optional[List[str]] = None,
     console_token: Optional[str] = None,
+    trusted_proxies: Optional[List[str]] = None,
 ) -> None:
     """Start the dashboard and block until interrupted."""
     import uvicorn
 
     from nst.web.app import create_app
 
-    check_bind(host, port)
+    from nst.web.app import LOOPBACK_NETWORKS, parse_networks
+
+    check_bind(host, port, mode)
     token, proxy_origins = resolve_settings(mode, allowed_hosts or [], console_token)
+    proxies = list(trusted_proxies or LOOPBACK_NETWORKS)
+    try:
+        parse_networks(proxies)
+    except ValueError as exc:
+        raise ConfigurationError(f"Invalid NST_TRUSTED_PROXIES entry: {exc}") from exc
     app = create_app(
         config, token=token, port=port,
         extra_origins=[*(dev_origins or []), *proxy_origins],
-        mode=mode, allowed_hosts=allowed_hosts or [],
+        mode=mode, allowed_hosts=allowed_hosts or [], trusted_proxies=proxies,
     )
     if mode == "local":
         assert token is not None

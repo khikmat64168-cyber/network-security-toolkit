@@ -232,10 +232,11 @@ page. For live frontend development see the Networkscan-front README.
 
 ## Deployment
 
-The public demo and a private console run on a VPS behind Caddy, deployed
-from git tags by GitHub Actions (Docker images on GHCR). The runbook —
-one-time VPS setup, secrets, release order, switching to a real domain —
-is in [deploy/README.md](deploy/README.md).
+The public demo runs on a VPS as a Coolify app (Traefik provides HTTPS);
+the private console runs on the same VPS on loopback and is opened through
+an SSH tunnel. Both are deployed from git tags by GitHub Actions (Docker
+images on GHCR). The runbook — one-time setup, secrets, release order — is
+in [deploy/README.md](deploy/README.md).
 
 ---
 

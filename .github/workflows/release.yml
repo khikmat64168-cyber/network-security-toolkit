@@ -1,12 +1,18 @@
 name: Release
 
 # Push a tag like v1.2.3 (matching nst.__version__) to test, publish the
-# image to GHCR, attach the wheel to a GitHub Release, and deploy to the VPS.
+# image (with the web console pinned in frontend.version) to GHCR, attach
+# the wheel to a GitHub Release, redeploy the public demo on Coolify and the
+# private console on the VPS.
 #
 # Repository secrets (Settings → Secrets and variables → Actions):
-#   VPS_HOST         VPS address (IP or name)
-#   VPS_SSH_KEY      private key of the "deploy" user (vps-setup.sh --ci-key gets the public half)
-#   VPS_KNOWN_HOSTS  output of: ssh-keyscan -t ed25519 <VPS address>
+#   COOLIFY_DEPLOY_WEBHOOK  the public-demo resource's "Deploy Webhook" URL (Coolify → resource → Webhooks)
+#   COOLIFY_API_TOKEN       a Coolify API token with deploy permission (Coolify → Keys & Tokens)
+#   VPS_HOST                VPS address
+#   VPS_SSH_KEY             private key of the "deploy" user (console-setup.sh --ci-key gets the public half)
+#   VPS_KNOWN_HOSTS         output of: ssh-keyscan -t ed25519 <VPS address>
+# Repository variable:
+#   PUBLIC_URL              e.g. https://nst.example.com — checked after the Coolify deploy
 on:
   push:
     tags: ["v*"]
@@ -48,6 +54,8 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@v4
+      - name: Bundle the pinned web console
+        run: ./scripts/fetch_frontend.sh --release
       - name: Log in to GHCR
         run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
       - name: Build and push
@@ -78,13 +86,37 @@ jobs:
           gh release create "$GITHUB_REF_NAME" dist/* \
             --title "$GITHUB_REF_NAME" --generate-notes --verify-tag
 
-  deploy:
+  deploy-public:
+    name: Deploy public demo (Coolify)
     needs: image
     runs-on: ubuntu-24.04
     environment: production
-    permissions:
-      contents: read
-      packages: read
+    steps:
+      - name: Trigger the Coolify deployment
+        env:
+          WEBHOOK: ${{ secrets.COOLIFY_DEPLOY_WEBHOOK }}
+          TOKEN: ${{ secrets.COOLIFY_API_TOKEN }}
+        run: |
+          curl -fsS --retry 3 -H "Authorization: Bearer $TOKEN" "$WEBHOOK"
+      - name: Wait for the new version
+        env:
+          PUBLIC_URL: ${{ vars.PUBLIC_URL }}
+        run: |
+          [ -n "$PUBLIC_URL" ] || { echo "set the PUBLIC_URL repository variable"; exit 1; }
+          want="${GITHUB_REF_NAME#v}"
+          for _ in $(seq 1 60); do
+            got="$(curl -fsS --max-time 5 "$PUBLIC_URL/api/mode" | sed -n 's/.*"version":"\([^"]*\)".*/\1/p' || true)"
+            [ "$got" = "$want" ] && { echo "public demo is on $got"; exit 0; }
+            sleep 10
+          done
+          echo "public demo did not reach $want (last seen: ${got:-nothing})"
+          exit 1
+
+  deploy-console:
+    name: Deploy private console (VPS)
+    needs: image
+    runs-on: ubuntu-24.04
+    environment: production
     steps:
       - uses: actions/checkout@v4
       - name: SSH setup
@@ -93,17 +125,11 @@ jobs:
           printf '%s\n' "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/id_ed25519
           printf '%s\n' "${{ secrets.VPS_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
           chmod 600 ~/.ssh/id_ed25519 ~/.ssh/known_hosts
-      - name: Copy deployment files
+      - name: Copy and run
         run: |
-          scp -q deploy/docker-compose.yml deploy/Caddyfile deploy/deploy.sh deploy/deploy-front.sh \
-            "deploy@${{ secrets.VPS_HOST }}:/opt/nst/deploy/"
-      - name: Deploy
-        run: |
-          # The job's short-lived token pulls the image; it is removed right after.
+          scp -q deploy/console/docker-compose.yml deploy/deploy-console.sh \
+            "deploy@${{ secrets.VPS_HOST }}:/opt/nst-console/"
           # The tag is expanded here on purpose (SC2029).
           # shellcheck disable=SC2029
           ssh "deploy@${{ secrets.VPS_HOST }}" \
-            "docker login ghcr.io -u '${{ github.actor }}' --password-stdin >/dev/null \
-             && chmod +x /opt/nst/deploy/*.sh \
-             && /opt/nst/deploy/deploy.sh '$GITHUB_REF_NAME'; rc=\$?; docker logout ghcr.io >/dev/null; exit \$rc" \
-            <<< "${{ secrets.GITHUB_TOKEN }}"
+            "chmod +x /opt/nst-console/deploy-console.sh && /opt/nst-console/deploy-console.sh '$GITHUB_REF_NAME'"
